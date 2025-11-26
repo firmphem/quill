@@ -53,6 +53,8 @@ func insertBatchCopy(ctx context.Context, db *pgxpool.Pool, batch []MetricRow, w
 		return nil
 	}
 
+	trackToPostgresUsingCopyMethod := tracker.Start("toPostgresUsingCopyMethod")
+	defer trackToPostgresUsingCopyMethod()
 	// Prepare rows for COPY
 	rows := make([][]interface{}, len(batch))
 	for i, r := range batch {
@@ -104,10 +106,11 @@ func insertBatchCopy(ctx context.Context, db *pgxpool.Pool, batch []MetricRow, w
 	rowsInsertedTotal.Add(float64(ct))
 	batchesTotal.Inc()
 
+	trackToPostgresUsingCopyMethod()
 	// ⏱️ 8️⃣ Log duration and throughput
 
 	// ✅ Log with realistic duration and throughput
-	log.Info().
+	log.Debug().
 		Int("worker", workerID).
 		Int("batchSize", len(batch)).
 		Int64("rowsInserted", ct).
@@ -124,6 +127,8 @@ func insertBatchFallback(ctx context.Context, db *pgxpool.Pool, batch []MetricRo
 		return nil
 	}
 
+	trackToPostgresUsingRowByRow := tracker.Start("toPostgresUsingRowByRow")
+	defer trackToPostgresUsingRowByRow()
 	// Prepare insert SQL for metric table
 	sql := `
 		INSERT INTO metric_unclogged (
@@ -174,6 +179,8 @@ func insertBatchFallback(ctx context.Context, db *pgxpool.Pool, batch []MetricRo
 		Msg("Fallback insert completed with ON CONFLICT DO NOTHING")
 
 	rowsInsertedTotal.Add(float64(inserted))
+	trackToPostgresUsingRowByRow()
+
 	return nil
 }
 
@@ -286,7 +293,7 @@ func batchProcessor(
 			rowsFailedTotal.Add(float64(len(buffer)))
 			// ❌ Do not commit offsets if DB failed
 		} else {
-			log.Info().
+			log.Debug().
 				Int("worker", workerID).
 				Int("count", len(buffer)).
 				Msg("Batch inserted successfully")

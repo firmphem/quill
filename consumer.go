@@ -42,7 +42,6 @@ func processMessage(
 	out chan<- MetricRow,
 	consumer *kafka.Consumer,
 	_ int,
-
 ) {
 	messagesReceivedTotal.Inc()
 
@@ -194,6 +193,8 @@ func processMessage(
 	} // ⬅️ Close the switch
 
 	// 2️⃣ Lookup or create all reference IDs (cached in memory)
+	trackerPayloadCacheLookup := tracker.Start("cache_lookup")
+	defer trackerPayloadCacheLookup()
 	groupID, err := lookupOrCreateRefID(ctx, db, groupCache, &refMu,
 		"group_ref", "group_id", km.Topic.GroupID)
 	if err != nil {
@@ -221,13 +222,13 @@ func processMessage(
 		log.Error().Err(err).Msg("Failed to resolve data_class")
 		return
 	}
+	trackerPayloadCacheLookup()
 
 	payloadTs := time.UnixMilli(km.Payload.Timestamp)
 
 	// 3️⃣ Process each metric in the payload
 	for _, metric := range km.Payload.Metrics {
-		// (a) numeric value conversion
-		//val, ok := toFloat64(metric.Value)
+		trackerMetricsToMetricRow := tracker.Start("metricsToMetricRow")
 		var val float64
 		var ok bool
 
@@ -293,6 +294,7 @@ func processMessage(
 
 			Msg: *m,
 		}
+		trackerMetricsToMetricRow()
 
 		// (d) Send row to batch processor
 		select {

@@ -29,7 +29,12 @@ var (
 
 var (
 	dedupMu sync.Mutex
+	tracker *Tracker
 )
+
+func init() {
+	tracker = NewTracker(3*time.Second, 12)
+}
 
 // ------------------- Main -------------------
 func main() {
