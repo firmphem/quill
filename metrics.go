@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
@@ -19,12 +18,14 @@ import (
 func insertSensorErrorRow(
 	ctx context.Context,
 	db *pgxpool.Pool,
-	sensorName string,
 	reason string,
-	rawValue []byte,
-	partition int,
-	offset int64,
+	m *kafka.Message,
 ) {
+
+	rawValue := m.Value
+	partition := m.TopicPartition.Partition
+	offset := int64(m.TopicPartition.Offset)
+
 	if rawValue == nil {
 		rawValue = []byte("{}") // minimal placeholder
 	}
@@ -32,91 +33,12 @@ func insertSensorErrorRow(
 	_, err := db.Exec(ctx, `
 		INSERT INTO sensor_errors (created_at, sensor_name, reason, raw_payload, partition, kafka_offset)
 		VALUES ($1, $2, $3, $4, $5, $6)
-	`, time.Now(), sensorName, reason, rawValue, partition, offset)
+	`, time.Now(), '-', reason, rawValue, partition, offset)
 
 	if err != nil {
-		log.Error().
-			Err(err).
-			Str("sensor", sensorName).
-			Msg("Failed to insert sensor error row")
-	} else {
-		log.Info().
-			Str("sensor", sensorName).
-			Str("reason", reason).
-			Msg("Inserted sensor error row")
+		log.Error().Int32("partition", partition).Int64("offset", offset).Err(err).Msg("Failed to insert payload into sensor_error")
+		// TODO: dump kafkaMessage into a file in the special folder.
 	}
-}
-
-// ------------------- DB Insert (COPY with Dedup) -------------------
-func insertBatchCopy(ctx context.Context, db *pgxpool.Pool, batch []MetricRow, workerID int) error {
-	if len(batch) == 0 {
-		return nil
-	}
-
-	// Prepare rows for COPY
-	rows := make([][]interface{}, len(batch))
-	for i, r := range batch {
-		rows[i] = []interface{}{
-			r.MetricTimestamp.UnixMilli(),  // metric_timestamp (BIGINT)
-			r.PayloadTimestamp.UnixMilli(), // payload_timestamp (BIGINT)
-			r.Value,                        // value
-			r.MetricNameNo,                 // metric_name_no
-			r.DeviceIDNo,                   // device_id_no
-			r.NodeIDNo,                     // node_id_no
-			r.GroupIDNo,                    // group_id_no
-			r.TypeNo,                       // type_no
-		}
-	}
-
-	log.Debug().
-		Int("worker", workerID).
-		Int("row_count", len(batch)).
-		Msg("COPYing batch into metric table")
-	start := time.Now()
-	ct, err := db.CopyFrom(
-		ctx,
-		pgx.Identifier{"metric"},
-		[]string{
-			"metric_timestamp",
-			"payload_timestamp",
-			"value",
-			"metric_name_no",
-			"device_id_no",
-			"node_id_no",
-			"group_id_no",
-			"type_no",
-		},
-		pgx.CopyFromRows(rows),
-	)
-	duration := time.Since(start)
-	if err != nil {
-		return fmt.Errorf("copy into metric failed: %w", err)
-	}
-
-	if int(ct) != len(batch) {
-		log.Warn().
-			Int("worker", workerID).
-			Int("expected", len(batch)).
-			Int64("inserted", ct).
-			Msg("COPY inserted fewer rows than expected")
-	}
-
-	rowsInsertedTotal.Add(float64(ct))
-	batchesTotal.Inc()
-
-	// ⏱️ 8️⃣ Log duration and throughput
-
-	// ✅ Log with realistic duration and throughput
-	log.Info().
-		Int("worker", workerID).
-		Int("batchSize", len(batch)).
-		Int64("rowsInserted", ct).
-		Str("duration", duration.String()). // <-- use String() for human-readable
-		Float64("rowsPerSec", float64(ct)/duration.Seconds()).
-		Msg("Batch inserted with COPY")
-
-	return nil
-
 }
 
 func insertBatchFallback(ctx context.Context, db *pgxpool.Pool, batch []MetricRow, workerID int) error {
@@ -147,7 +69,7 @@ func insertBatchFallback(ctx context.Context, db *pgxpool.Pool, batch []MetricRo
 			ctx,
 			sql,
 			r.MetricTimestamp.UnixMilli(),
-			r.PayloadTimestamp.UnixMilli(),
+			//r.PayloadTimestamp.UnixMilli(),
 			r.Value,
 			r.MetricNameNo,
 			r.DeviceIDNo,
@@ -178,7 +100,7 @@ func insertBatchFallback(ctx context.Context, db *pgxpool.Pool, batch []MetricRo
 }
 
 // retryInsertBatch tries to insert a batch with exponential backoff.
-// It retries only on transient errors (like network or timeout issues).
+// it retries only on transient errors (like network or timeout issues).
 func retryInsertBatch(ctx context.Context, db *pgxpool.Pool, batch []MetricRow, workerID int) error {
 	const maxRetries = 3
 	baseDelay := time.Second
@@ -187,7 +109,7 @@ func retryInsertBatch(ctx context.Context, db *pgxpool.Pool, batch []MetricRow, 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		lastErr = insertBatchFn(ctx, db, batch, workerID)
 		if lastErr == nil {
-			return nil // ✅ success
+			return nil
 		}
 
 		// check if it's a Postgres error
@@ -198,21 +120,20 @@ func retryInsertBatch(ctx context.Context, db *pgxpool.Pool, batch []MetricRow, 
 			code := pgErr.Code
 
 			switch {
-			// Connection-level errors
+			// connection-level errors
 			case strings.HasPrefix(code, "08"):
 				isTransient = true
-			// Serialization failure or deadlock
+			// serialization failure or deadlock
 			case code == "40001" || code == "40P01":
 				isTransient = true
-			// Query canceled / timeout
+			// timeout
 			case code == "57014":
 				isTransient = true
-			// Everything else — not retryable
 			default:
 				isTransient = false
 			}
 		} else {
-			// Fallback: look for common transient patterns in plain errors
+			// fallback: look for common transient patterns in plain errors
 			msg := lastErr.Error()
 			isTransient = strings.Contains(msg, "timeout") ||
 				strings.Contains(msg, "connection reset") ||
@@ -220,7 +141,6 @@ func retryInsertBatch(ctx context.Context, db *pgxpool.Pool, batch []MetricRow, 
 		}
 
 		if !isTransient {
-			// ❌ non-retryable
 			return lastErr
 		}
 

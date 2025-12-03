@@ -68,7 +68,6 @@ services:
       - quill_network
     environment:
       KAFKA_METRIC_TOPIC: metrics
-      KAFKA_METRIC_DLQ_TOPIC: metrics-dlq
     depends_on:
       - kafka
     restart: no
@@ -79,10 +78,7 @@ services:
         kafka-broker-api-versions --bootstrap-server kafka:9092 --timeout 30000
 
         echo 'creating metrics topic...'
-        kafka-topics --bootstrap-server rwe-kafka:9092 --create --if-not-exists --topic $$KAFKA_METRIC_TOPIC --partitions 1 --replication-factor 1
-
-        echo 'creating dlq topic...'
-        kafka-topics --bootstrap-server rwe-kafka:9092 --create --if-not-exists --topic $$KAFKA_METRIC_DLQ_TOPIC --partitions 1 --replication-factor 1
+        kafka-topics --bootstrap-server rwe-kafka:9092 --create --if-not-exists --topic $$KAFKA_METRIC_TOPIC --partitions 12 --replication-factor 1
 
         echo 'Topics creation complete.'
       "

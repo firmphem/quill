@@ -75,8 +75,6 @@ quill:
   batch_timeout_seconds: 5s
   workers: 2
   consumers: 1
-dlq:
-  topic: "dlq"
 logging:
   level: "debug"
 `

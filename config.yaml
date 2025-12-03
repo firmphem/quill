@@ -1,27 +1,28 @@
-# QUILL Configuration
 kafka:
-  brokers: 
+  brokers:
     - "10.117.209.25:9092"
     - "10.117.209.26:9092"
     - "10.117.209.27:9092"   # Replace with your actual Kafka broker addresses
-  topic: "mqtt"      # Replace with your Kafka topic
+  topic: "metrics"      # Replace with your Kafka topic
   group_id: "quill-consumer-group"
 
 database:
   host: "10.117.209.17"         # Replace with your TimescaleDB host
-  port: 5432
+  port: 5433
   user: "postgres"        # Replace with your DB user
   name: "bess_data"    # Replace with your DB name
   sslmode: disable
 
 quill:
-  batch_size: 20000          # Number of rows to batch before insert
-  batch_timeout_seconds: 2s  # Max seconds to wait before inserting a partial batch
-  workers: 36       # Number of concurrent DB workers
-  consumers: 24
+  batch_size: 30000          # Number of rows to batch before insert
+  batch_timeout_seconds: 1s  # Max seconds to wait before inserting a partial batch
+  channel_size: 4000
+  kafka_offset_commit:
+     every_messages: 100
+     every_milliseconds: 10000
 
 http:
   metrics_port: 8081
 
-dlq:
-  topic: "quill-dead-letter"
+tracker:
+   enabled: false

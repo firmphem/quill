@@ -213,6 +213,6 @@ func preloadReferenceCaches(ctx context.Context, db *pgxpool.Pool) error {
 		log.Info().Str("table", t.table).Int("entries", count).Msg("Cache preloaded")
 	}
 
-	log.Info().Msg("✅ All reference caches preloaded successfully")
+	log.Info().Msg("All reference caches preloaded successfully")
 	return nil
 }

@@ -20,6 +20,26 @@ SET default_tablespace = '';
 
 SET default_table_access_method = heap;
 
+
+CREATE TABLE IF NOT EXISTS nbirth (
+   id SERIAL PRIMARY KEY,
+   edge_node_id TEXT NOT NULL,
+   metric_name TEXT NOT NULL,
+   metric_timestamp BIGINT NOT NULL,
+   created_at TIMESTAMP DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS dbirth (
+	id SERIAL PRIMARY KEY,
+	edge_node_id TEXT NOT NULL,
+	device_id TEXT NOT NULL,
+	metric_name TEXT NOT NULL,
+	metric_timestamp BIGINT NOT NULL,
+	data_type TEXT NOT NULL,
+	created_at TIMESTAMP DEFAULT now()
+);
+
+
 --
 -- Name: data_class; Type: TABLE; Schema: public; Owner: postgres
 --
@@ -202,7 +222,6 @@ ALTER SEQUENCE public.group_ref_group_id_no_seq OWNED BY public.group_ref.group_
 --
 
 CREATE TABLE public.metric (
-    payload_timestamp bigint NOT NULL,
     metric_timestamp bigint NOT NULL,
     value double precision NOT NULL,
     device_id_no integer NOT NULL,

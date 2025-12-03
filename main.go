@@ -2,8 +2,12 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,15 +35,44 @@ var (
 	dedupMu sync.Mutex
 )
 
-// ------------------- Main -------------------
-func main() {
+func init() {
+	log.Logger = setupLogging()
+
+	flag.StringVar(&configFile, "config", "", "path to config yaml")
+	flag.Parse()
+
+	if configFile == "" {
+		log.Info().Msg("config file was not provided. going to try a default one 'config.yaml'")
+		configFile = "config.yaml"
+	}
+	log.Info().Msg(fmt.Sprintf("config file was set to '%v'", configFile))
+}
+
+func setupLogging() zerolog.Logger {
 	zerolog.TimeFieldFormat = time.RFC3339
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
-	defer stop()
+	zerolog.CallerMarshalFunc = func(pc uintptr, file string, line int) string {
+		fn := runtime.FuncForPC(pc)
+		if fn == nil {
+			return "unknown"
+		}
+		return filepath.Base(fn.Name())
+	}
 
-	cfg, err := loadConfig("config.yaml")
+	output := zerolog.ConsoleWriter{
+		Out:        os.Stdout,
+		TimeFormat: time.RFC3339,
+	}
+
+	return zerolog.New(output).
+		With().
+		Timestamp().
+		Caller().
+		Logger()
+}
+
+func loadAndInitConfig() *Config {
+	cfg, err := loadConfig(configFile)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to load config")
 	}
@@ -48,162 +81,284 @@ func main() {
 	}
 	currentConfig.Store(cfg)
 	applyLogLevel(cfg)
+	return cfg
+}
 
-	// DB pool
+func initKafkaConsumer(cfg *Config) *kafka.Consumer {
+	kcfg := &kafka.ConfigMap{
+		"bootstrap.servers":  strings.Join(cfg.Kafka.Brokers, ","),
+		"group.id":           cfg.Kafka.GroupID,
+		"enable.auto.commit": false,
+		"auto.offset.reset":  "earliest",
+	}
+
+	consumer, err := kafka.NewConsumer(kcfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "kafka consumer create: %v\n", err)
+		os.Exit(2)
+	}
+	return consumer
+}
+
+func main() {
+
+	cfg := loadAndInitConfig()
 	dbPool, err := createDBPool(cfg)
 	if err != nil {
 		log.Fatal().Err(err).Msg("DB connection failed")
 	}
 	defer dbPool.Close()
-	if err := preloadReferenceCaches(ctx, dbPool); err != nil {
+
+	// global context to cancel everything
+	globalCtx, globalCancel := context.WithCancel(context.Background())
+	defer globalCancel()
+
+	tracker = newTracker(globalCtx, time.Second*10, log.Logger)
+	if cfg.Tracker.Enabled {
+		log.Info().Msg("tracker was enabled")
+		tracker.enable()
+	} else {
+		log.Info().Msg("tracker was disabled")
+	}
+	defer tracker.stop()
+
+	if err := preloadReferenceCaches(globalCtx, dbPool); err != nil {
 		log.Fatal().Err(err).Msg("Failed to preload sensor cache")
 	}
 
-	httpServer := startPrometheusEndpoint(ctx, dbPool)
+	mainConsumer := initKafkaConsumer(cfg)
 
-	// ✅ Confluent Kafka DLQ Producer
-	producer, err := kafka.NewProducer(&kafka.ConfigMap{
-		"bootstrap.servers":            strings.Join(cfg.Kafka.Brokers, ","),
-		"queue.buffering.max.messages": 1000000,
-		"linger.ms":                    10,
-		"batch.num.messages":           10000,
-	})
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to create Confluent DLQ producer")
-	}
-	defer func() {
-		log.Info().Msg("Flushing and closing DLQ producer...")
-		producer.Flush(5000) // wait up to 5s for pending messages
-		producer.Close()
-	}()
+	// worker map & sync
+	workers := make(map[int32]*PartitionWorker)
+	var workersMu sync.Mutex
+	var workerWG sync.WaitGroup
 
-	// ✅ Background delivery-report handler
-	go func() {
-		for e := range producer.Events() {
-			switch ev := e.(type) {
-			case *kafka.Message:
-				if ev.TopicPartition.Error != nil {
-					log.Error().
-						Str("topic", *ev.TopicPartition.Topic).
-						Err(ev.TopicPartition.Error).
-						Msg("DLQ delivery failed")
-				}
+	// partitions state & guard
+	partitions := make(map[int32]*partitionState)
+	var partitionsMu sync.Mutex
+
+	ackCh := make(chan Ack, cfg.Quill.ChannelSize) // tune it
+	topic := cfg.Kafka.Topic
+
+	ensureWorker := func(partition int32) {
+		workersMu.Lock()
+		defer workersMu.Unlock()
+		if _, ok := workers[partition]; ok {
+			return
+		}
+		w := newPartitionWorker(partition, topic, &workerWG, globalCtx)
+		workers[partition] = w
+		partitionsMu.Lock()
+		if _, ok := partitions[partition]; !ok {
+			partitions[partition] = &partitionState{
+				lastProcessed: -1,
+				lastCommitted: -1,
+				msgCount:      0,
 			}
 		}
-	}()
-
-	// ✅ Channel for DLQ messages
-	dlqChan := make(chan DLQMessage, 1000)
-	go asyncDLQWriter(ctx, producer, dbPool, dlqChan)
-
-	// Confluent Kafka
-	consumer, err := kafka.NewConsumer(&kafka.ConfigMap{
-		"bootstrap.servers":  strings.Join(cfg.Kafka.Brokers, ","),
-		"group.id":           cfg.Kafka.GroupID,
-		"auto.offset.reset":  "earliest",
-		"enable.auto.commit": false, // we’ll commit manually after DB success
-		"session.timeout.ms": 6000,
-	})
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to create Kafka consumer")
-	}
-	defer func() {
-		log.Info().Msg("Closing Kafka consumer...")
-		consumer.Close()
-	}()
-
-	// ✅ Subscribe to the topic
-	if err := consumer.SubscribeTopics([]string{cfg.Kafka.Topic}, nil); err != nil {
-		log.Fatal().Err(err).Msg("Failed to subscribe to topic")
+		partitionsMu.Unlock()
+		w.start(dbPool, ackCh)
 	}
 
-	msgChan := make(chan kafka.Message, cfg.Quill.BatchSize*2)
-	rowChan := make(chan MetricRow, cfg.Quill.BatchSize*2)
+	httpServer := startPrometheusEndpoint(globalCtx, dbPool)
 
-	// Barrier channel to signal workers to flush and exit
-	flushBarrier := make(chan struct{})
+	// some rebalance magic happens here
+	err = mainConsumer.Subscribe(topic, func(consumer *kafka.Consumer, ev kafka.Event) error {
+		switch e := ev.(type) {
+		case kafka.AssignedPartitions:
+			log.Info().Interface("partitions", e.Partitions).Msg("assigned")
+			if err := consumer.Assign(e.Partitions); err != nil {
+				log.Error().Err(err).Msg("paratition assigning error")
+			}
 
-	// Batch workers
-	for i := 0; i < cfg.Quill.Workers; i++ {
-		go batchProcessor(ctx, dbPool, rowChan, consumer, i, flushBarrier)
-	}
+			// create workers for assigned partitions
+			for _, tp := range e.Partitions {
+				ensureWorker(tp.Partition)
+			}
+			return nil
 
-	// Consumer workers
-	for i := 0; i < cfg.Quill.Consumers; i++ {
-		go func(id int) {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case m := <-msgChan:
-					processMessage(ctx, &m, dbPool, producer, dlqChan, rowChan, consumer, id)
+		case kafka.RevokedPartitions:
+			log.Info().Interface("partitions", e.Partitions).Msg("revoked")
+
+			// commit last processed offsets for revoked partitions (from partition state)
+			partitionsMu.Lock()
+			var offsets []kafka.TopicPartition
+			for _, tp := range e.Partitions {
+				ps := partitions[tp.Partition]
+				if ps != nil && ps.lastProcessed >= 0 && ps.lastProcessed != ps.lastCommitted {
+					offsets = append(offsets, kafka.TopicPartition{
+						Topic:     &topic,
+						Partition: tp.Partition,
+						Offset:    ps.lastProcessed + 1,
+					})
 				}
 			}
-		}(i)
+			partitionsMu.Unlock()
+
+			if len(offsets) > 0 {
+				log.Debug().Interface("offsets", offsets).Msg("committing offsets for revoked partitions")
+				if _, err := consumer.CommitOffsets(offsets); err != nil {
+					log.Error().Err(err).Msg("commit on revoke failed")
+				}
+			}
+
+			// stop workers and remove partition state
+			workersMu.Lock()
+			for _, tp := range e.Partitions {
+				if w, ok := workers[tp.Partition]; ok {
+					w.stop()
+					w.closeMsgCh()
+					delete(workers, tp.Partition)
+				}
+				partitionsMu.Lock()
+				delete(partitions, tp.Partition)
+				partitionsMu.Unlock()
+			}
+			workersMu.Unlock()
+
+			if err := consumer.Unassign(); err != nil {
+				log.Error().Err(err).Msg("partition unassigning error")
+			}
+			return nil
+
+		}
+		return nil
+	})
+	if err != nil {
+		log.Fatal().Err(err).Msg("cant subscribe topic error")
 	}
 
-	// Reader loop with backpressure
-	// Kafka consumer loop
+	// main poll loop
+	pollCtx, pollCancel := context.WithCancel(context.Background())
+	var pollWG sync.WaitGroup
+	pollWG.Add(1)
+
+	// todo:
+	// need to monitor channel if they (+ack) are full
+	// add exp backup off if required (will see perf test)
+
+	// non-blocking but cpu hungry when is full
 	go func() {
-		log.Info().Msg("Starting Confluent Kafka consumer poll loop")
+		defer pollWG.Done()
 
 		for {
 			select {
-			case <-ctx.Done():
-				log.Info().Msg("Kafka consumer exiting (context canceled)")
+			case <-pollCtx.Done():
 				return
 			default:
-				ev := consumer.Poll(100) // poll every 100 ms
-				if ev == nil {
-					continue
+			}
+
+			s := tracker.startStage("poll")
+			ev := mainConsumer.Poll(100)
+			if ev == nil {
+				s.end()
+				continue
+			}
+			s.end()
+
+			switch e := ev.(type) {
+			case *kafka.Message:
+				s := tracker.startStage("routing")
+				p := e.TopicPartition.Partition
+				ensureWorker(p)
+				workersMu.Lock()
+				w := workers[p]
+				workersMu.Unlock()
+				if w == nil {
+					log.Fatal().Int32("partition", p).Msg("no worker for partition found")
 				}
 
-				switch e := ev.(type) {
-				case *kafka.Message:
-					// ✅ forward message to channel
+				delivered := false
+				for !delivered {
 					select {
-					case msgChan <- *e:
-					case <-ctx.Done():
+					case <-pollCtx.Done():
 						return
+					case w.msgCh <- e:
+						delivered = true
+					default:
+						// exp backup off vs high cpu usage????
+						time.Sleep(1 * time.Millisecond)
 					}
-
-				case kafka.Error:
-					log.Error().Err(e).Msg("Kafka error event")
-				default:
-					// ignore other events (logs/stats)
 				}
+				s.end()
+
+			case kafka.Error:
+				log.Fatal().Err(e).Msg("main consumer error. failing the application. check kafka connection")
+			default:
 			}
 		}
 	}()
 
-	// Wait for termination signal
-	<-ctx.Done()
-	log.Warn().Msg("🛑 Shutdown signal received, flushing in-flight data...")
+	// todo: probably we will get rid of it after perf test
+	// go func() {
+	// 	defer pollWG.Done()
+	// 	for {
+	// 		select {
+	// 		case <-pollCtx.Done():
+	// 			return
+	// 		default:
+	// 		}
+	// 		ev := mainConsumer.Poll(100)
+	// 		if ev == nil {
+	// 			continue
+	// 		}
+	//
+	// 		switch e := ev.(type) {
+	// 		case *kafka.Message:
+	// 			p := e.TopicPartition.Partition
+	// 			ensureWorker(p)
+	// 			workersMu.Lock()
+	// 			w := workers[p]
+	// 			workersMu.Unlock()
+	// 			if w == nil {
+	// 				log.Debug().Int32("partition", p).Msg("no worker for partition found")
+	// 				continue
+	// 			}
+	// 			select {
+	// 			case <-pollCtx.Done():
+	// 				return
+	// 			case w.msgCh <- e:
+	// 			default:
+	// 				w.msgCh <- e
+	// 			}
+	//
+	// 		case kafka.Error:
+	// 			log.Fatal().Err(e).Msg("main consumer error. failing the application. check kafka connection")
+	// 		default:
+	// 		}
+	// 	}
+	// }()
 
-	// Step 1: stop reading new Kafka messages
-	log.Info().Msg("Stopping Kafka reader...")
-	log.Info().Msg("Closing Kafka consumer...")
-	consumer.Close()
+	// Commit manager: receive acks and commit offsets by batch/time.
+	commitDone := make(chan struct{})
+	go commitManager(globalCtx, &partitionsMu, partitions, topic, mainConsumer, ackCh, commitDone)
 
-	// Step 2: signal all batch workers to flush and exit
-	close(flushBarrier)
-	log.Info().Msg("Waiting for batch workers to finish final flush...")
-	time.Sleep(3 * time.Second) // optional small grace delay
+	// everything below is about graceful shutdown of all things
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
+	<-sig
+	log.Info().Msg("shutdown requested...")
 
-	// Graceful HTTP shutdown
-	log.Info().Msg("Stopping HTTP metrics server...")
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := httpServer.Shutdown(shutdownCtx); err != nil {
-		log.Error().Err(err).Msg("Failed to shut down HTTP server cleanly")
-	} else {
-		log.Info().Msg("HTTP metrics server stopped")
+	globalCancel()
+
+	pollCancel()
+	pollWG.Wait()
+
+	workersMu.Lock()
+	for _, w := range workers {
+		w.stop()
+		w.closeMsgCh()
 	}
+	workersMu.Unlock()
 
-	// Step 3: close DB pool
-	log.Info().Msg("Closing DB connection pool...")
-	dbPool.Close()
+	workerWG.Wait()
 
-	log.Info().Msg("✅ QUILL shutdown complete — all data flushed")
+	<-commitDone
 
+	mainConsumer.Close()
+	log.Info().Msg("main consumer was closed...")
+
+	gracefulHTTPShutdown(httpServer)
+
+	log.Info().Msg("graceful shutdownn completed...")
 }

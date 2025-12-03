@@ -3,6 +3,8 @@
 package main
 
 import (
+	"context"
+	"sync"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
@@ -29,14 +31,6 @@ type PayloadInfo struct {
 	Seq       int      `json:"seq"`
 }
 
-type DLQMessage struct {
-	Key       string
-	Value     []byte
-	Reason    string
-	Partition int
-	Offset    int64
-}
-
 type Metric struct {
 	Name      string      `json:"name"`
 	Timestamp int64       `json:"timestamp"`
@@ -46,8 +40,8 @@ type Metric struct {
 
 // Represents one row ready to insert into the `metric` table.
 type MetricRow struct {
-	MetricTimestamp  time.Time // derived from metric.timestamp
-	PayloadTimestamp time.Time // derived from payload.timestamp
+	MetricTimestamp time.Time // derived from metric.timestamp
+	// PayloadTimestamp time.Time // derived from payload.timestamp
 	//DataType         string    // "Float", "Int32", etc.
 	Value float64
 
@@ -94,4 +88,31 @@ type DBirthMessage struct {
 		Metrics   []Metric `json:"metrics"`
 		Seq       int      `json:"seq"`
 	} `json:"payload"`
+}
+
+type PartitionWorker struct {
+	// kafka relateed stuff
+	partition int32
+	topic     string
+
+	msgCh chan *kafka.Message
+	wg    *sync.WaitGroup
+
+	// cancellation
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	closeOnce sync.Once
+}
+
+type Ack struct {
+	Partition int32
+	Offset    kafka.Offset // message offset that was processed
+	CommitNow bool         // if worker asks for immediate commit
+}
+
+type partitionState struct {
+	lastProcessed kafka.Offset // last processed message offset
+	lastCommitted kafka.Offset // last committed offset (offset committed - 1)
+	msgCount      int
 }
