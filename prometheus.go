@@ -6,12 +6,21 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync/atomic"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
 )
+
+// TODO:
+// - monitor channel
+// -
+
+// just for debugging datapointsReceivedTotal
+var datapointsReceivedAtomic atomic.Uint64
 
 var (
 	messagesTotal = prometheus.NewCounter(prometheus.CounterOpts{
@@ -59,11 +68,15 @@ var (
 		Name: "quill_datapoints_received_total",
 		Help: "Datapoints received from Kafka",
 	})
-
 	offsetsCommittedTotal = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Name: "quill_offsets_committed_total",
 			Help: "Total number of Kafka offsets successfully committed",
+		})
+	serviceUptimeSeconds = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "quill_uptime_seconds",
+			Help: "Service uptime in seconds",
 		})
 )
 
@@ -74,7 +87,7 @@ func startPrometheusEndpoint(ctx context.Context, dbPool *pgxpool.Pool) *http.Se
 	prometheus.MustRegister(
 		messagesTotal, batchesTotal, errorsTotal, batchSizeHist, retriesTotal,
 		rowsInsertedTotal, rowsFailedTotal, rowsEnqueued,
-		messagesReceivedTotal, rowsReceivedTotal, datapointsReceivedTotal, offsetsCommittedTotal,
+		messagesReceivedTotal, rowsReceivedTotal, datapointsReceivedTotal, offsetsCommittedTotal, serviceUptimeSeconds,
 	)
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
@@ -100,5 +113,42 @@ func startPrometheusEndpoint(ctx context.Context, dbPool *pgxpool.Pool) *http.Se
 		}
 	}()
 
+	// just for debugging we will print DPS to the stdout
+	go func() {
+		start := time.Now()
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+
+		var last uint64
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				uptime := time.Since(start).Seconds()
+				serviceUptimeSeconds.Set(uptime)
+
+				// DPS
+				current := datapointsReceivedAtomic.Load()
+				delta := current - last
+				last = current
+
+				log.Info().Float64("dps since start", float64(current)/uptime).Float64("dps last 10s", float64(delta)/10).Msg("prometheus dummy report")
+			}
+		}
+	}()
+
 	return httpServer
+}
+
+func startHTTP(ctx context.Context, dbPool *pgxpool.Pool) *http.Server {
+	return startPrometheusEndpoint(ctx, dbPool)
+}
+
+func gracefulHTTPShutdown(server *http.Server) {
+	log.Info().Msg("Stopping HTTP metrics server...")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	server.Shutdown(ctx)
 }

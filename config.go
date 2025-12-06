@@ -28,21 +28,26 @@ type Config struct {
 		Name     string `yaml:"name"`
 	} `yaml:"database"`
 	Quill struct {
-		BatchSize    int           `yaml:"batch_size"`
-		BatchTimeout time.Duration `yaml:"batch_timeout_seconds"`
-		Workers      int           `yaml:"workers"`
-		Consumers    int           `yaml:"consumers"`
+		BatchSize         int           `yaml:"batch_size"`
+		BatchTimeout      time.Duration `yaml:"batch_timeout_seconds"`
+		ChannelSize       int           `yaml:"channel_size"`
+		KafkaOffsetCommit struct {
+			EveryMessages     int `yaml:"every_messages"`
+			EveryMilliseconds int `yaml:"every_milliseconds"`
+		} `yaml:"kafka_offset_commit"`
 	} `yaml:"quill"`
-	DLQ struct {
-		Topic string `yaml:"topic"`
-	} `yaml:"dlq"`
 	Logging struct {
 		Level string `yaml:"level"`
 	} `yaml:"logging"`
 	HTTP struct {
 		MetricsPort int `yaml:"metrics_port"`
 	} `yaml:"http"`
+	Tracker struct {
+		Enabled bool `yaml:"enabled"`
+	} `yaml:"tracker"`
 }
+
+var configFile string
 
 // -----------------------------------------------------------------------------
 func loadConfig(path string) (*Config, error) {
@@ -77,7 +82,7 @@ func validateConfig(cfg *Config) error {
 	if cfg.Database.Host == "" || cfg.Database.User == "" || cfg.Database.Name == "" {
 		return fmt.Errorf("database config invalid")
 	}
-	if cfg.Quill.BatchSize <= 0 || cfg.Quill.BatchTimeout <= 0 || cfg.Quill.Consumers <= 0 {
+	if cfg.Quill.BatchSize <= 0 || cfg.Quill.BatchTimeout <= 0 {
 		return fmt.Errorf("quill config invalid")
 	}
 	return nil
@@ -98,4 +103,6 @@ func applyLogLevel(cfg *Config) {
 		zerolog.SetGlobalLevel(zerolog.InfoLevel)
 		log.Warn().Str("level", cfg.Logging.Level).Msg("Unknown log level, default INFO")
 	}
+	log.WithLevel(zerolog.NoLevel).
+		Msgf("log level is currently set to: %s", zerolog.GlobalLevel().String())
 }

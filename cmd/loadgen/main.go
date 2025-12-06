@@ -198,7 +198,7 @@ func main() {
 				msgRatePerWorker = float64(rate) / float64(batchSize*workers)
 			}
 			var ticker *time.Ticker
-			if msgRatePerWorker > 0 {
+			if time.Duration(msgRatePerWorker) > 0 {
 				interval := time.Second / time.Duration(msgRatePerWorker)
 				if interval < time.Microsecond {
 					interval = time.Microsecond

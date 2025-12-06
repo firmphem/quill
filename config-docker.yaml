@@ -1,0 +1,30 @@
+# QUILL Configuration
+kafka:
+  brokers:
+    - rwe-kafka:9092
+  topic: "metrics"      # Replace with your Kafka topic
+  group_id: "quill-consumer-group"
+
+database:
+  host: rwe-postgres
+  port: 5432
+  user: "quill"        # Replace with your DB user
+  name: "quill"    # Replace with your DB name
+  sslmode: disable
+
+quill:
+  batch_size: 20000          # Number of rows to batch before insert
+  batch_timeout_seconds: 1s  # Max seconds to wait before inserting a partial batch
+  channel_size: 4000
+  kafka_offset_commit:
+     every_messages: 10
+     every_milliseconds: 1000
+
+http:
+  metrics_port: 8081
+
+logging:
+   level: INFO
+
+tracker:
+   enabled: false
