@@ -1,0 +1,84 @@
+tests:
+  - name: <put the name of test which you like>
+    steps:
+      # we should always start with an empty database unless you have some reasons behind
+      - name: truncate db
+        type: golang
+        func: truncateDatabase
+
+        # we should always start with a new/empty kafka topic unless you have some reasons behind
+      - name: recreate kafka topic
+        type: golang
+        func: recreateKafkaTopic
+
+      # This is main function used to produce payloads
+      #
+      # golang signature
+      #
+      # func fnProducePayload(numPayloads int, numMetrics int, partition int, brokenPayloads bool, brokenMetrics bool) (any, error) {
+      #
+      #  numPayloads - amount of payloads
+      #  numMetrics  - amount of metrics in each payload
+      #  partition - partition number. -1 means message will go any partition. otherwise it will go to exact partition
+      #  brokenPayloads: true/false - if you want to make it payload absolutely unmarshalled by consumer
+      #  brokenMetrics:  true/false - do we need to produce broken/erroneous metrics
+      #
+      # some details about paload
+      #
+      # each payload has at least 5 metrics
+      #  4 - valid
+      #  2 - invalid
+      #  rest are always valid
+      #  valid metrics are started from "valid-...."
+      #  invalid metrics are started from "invalid-...."
+      - name: produce payload
+        type: golang
+        func: producePayload
+        positional_args: [ 1, 6, -1, false, true ]
+
+      # run consumer and exit from the first offset commit.
+      #   note: that we can process more than N message but will exit right after N's kafka commit
+      - name: run consumer
+        type: shell
+        func: ../quill --exit-after-n-messages 1 --config ../config-docker.yaml
+        ignore_errors: true
+        print_output: false
+
+      #
+      # now we go with different asserts
+      # whatever we will do it: exec sql or run shell script the output will be considered as a single item (that is why we need to return 1 row/1 column by queries)
+      #
+      # in assert condition we describe condition which is for '=' or 'contains'
+      #   in the value we put expected result against which we will check the output of the function
+      #
+      - name: assert amount of valid metrics
+        type: sql
+        func: "select count(1) from metric"
+        assert:
+           condition: "="
+           expected: 4
+
+      - name: assert reason of failed payload
+        type: sql
+        func: "select reason from sensor_errors"
+        assert:
+           condition: "contains"
+           expected: "failed to process payload due to metric value"
+
+      #
+      # also we have a golang function to verify kafka offset
+      #
+      # golang signature
+      #   func fnGetKafkaGroupConsumerCurrentOffset(partition int) (int, error)
+      #
+      #   as an input parameter it accepts partition number and returns the offset
+      #
+      - name: get current offset after consuming 1 from 3 messages
+        type: golang
+        func: getKafkaGroupConsumerCurrentOffset
+        positional_args: [6]
+        ignore_errors: false
+        print_output: true
+        assert:
+           condition: "="
+           expected: 1

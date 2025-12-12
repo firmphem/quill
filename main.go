@@ -24,6 +24,8 @@ import (
 var currentConfig atomic.Value // stores *Config
 var insertBatchFn = insertBatchCopy
 
+var exitAfterNMessages int32
+
 var (
 	// key = "timestamp|sensorID"
 	dedupCache sync.Map // key: string, value: time.Time
@@ -36,10 +38,13 @@ var (
 )
 
 func init() {
+	var x int
 	log.Logger = setupLogging()
 
 	flag.StringVar(&configFile, "config", "", "path to config yaml")
+	flag.IntVar(&x, "exit-after-n-messages", 0, "exit after processing N messages. this is for debug mode only")
 	flag.Parse()
+	exitAfterNMessages = int32(x)
 
 	if configFile == "" {
 		log.Info().Msg("config file was not provided. going to try a default one 'config.yaml'")
@@ -171,6 +176,19 @@ func main() {
 				log.Error().Err(err).Msg("paratition assigning error")
 			}
 
+			/////////////////////////////////
+			// fmt.Println("initial offsets:")
+			// for _, p := range e.Partitions {
+			// 	earliest, latest, err := mainConsumer.QueryWatermarkOffsets(*p.Topic, p.Partition, 5_000)
+			// 	if err != nil {
+			// 		fmt.Println("  error:", err)
+			// 		continue
+			// 	}
+			//
+			// 	fmt.Printf("  %s[%d] earliest=%d highest=%d)\n", *p.Topic, p.Partition, earliest, highest)
+			// }
+			// /////////////////////////////////
+
 			// create workers for assigned partitions
 			for _, tp := range e.Partitions {
 				ensureWorker(tp.Partition)
@@ -288,46 +306,6 @@ func main() {
 			}
 		}
 	}()
-
-	// todo: probably we will get rid of it after perf test
-	// go func() {
-	// 	defer pollWG.Done()
-	// 	for {
-	// 		select {
-	// 		case <-pollCtx.Done():
-	// 			return
-	// 		default:
-	// 		}
-	// 		ev := mainConsumer.Poll(100)
-	// 		if ev == nil {
-	// 			continue
-	// 		}
-	//
-	// 		switch e := ev.(type) {
-	// 		case *kafka.Message:
-	// 			p := e.TopicPartition.Partition
-	// 			ensureWorker(p)
-	// 			workersMu.Lock()
-	// 			w := workers[p]
-	// 			workersMu.Unlock()
-	// 			if w == nil {
-	// 				log.Debug().Int32("partition", p).Msg("no worker for partition found")
-	// 				continue
-	// 			}
-	// 			select {
-	// 			case <-pollCtx.Done():
-	// 				return
-	// 			case w.msgCh <- e:
-	// 			default:
-	// 				w.msgCh <- e
-	// 			}
-	//
-	// 		case kafka.Error:
-	// 			log.Fatal().Err(e).Msg("main consumer error. failing the application. check kafka connection")
-	// 		default:
-	// 		}
-	// 	}
-	// }()
 
 	// Commit manager: receive acks and commit offsets by batch/time.
 	commitDone := make(chan struct{})

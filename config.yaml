@@ -2,7 +2,6 @@ kafka:
   brokers:
     - "10.117.209.25:9092"
     - "10.117.209.26:9092"
-    - "10.117.209.27:9092"   # Replace with your actual Kafka broker addresses
   topic: "metrics"      # Replace with your Kafka topic
   group_id: "quill-consumer-group"
 
@@ -22,7 +21,7 @@ quill:
      every_milliseconds: 10000
 
 http:
-  metrics_port: 8081
+  metrics_port: 8084
 
 tracker:
    enabled: false

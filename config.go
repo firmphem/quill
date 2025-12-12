@@ -71,6 +71,12 @@ func loadConfig(path string) (*Config, error) {
 	if config.Database.Password == "" {
 		return nil, fmt.Errorf("QUILL_DB_PASSWORD not set")
 	}
+
+	if exitAfterNMessages > 0 {
+		config.Quill.KafkaOffsetCommit.EveryMessages = 1
+		config.Quill.KafkaOffsetCommit.EveryMilliseconds = 500000
+	}
+
 	return config, nil
 }
 
