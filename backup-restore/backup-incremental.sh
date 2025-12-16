@@ -501,48 +501,6 @@ cleanup_old_backups() {
     return 0
 }
 
-# Check if we have a recent backup that was just uploaded (prevent duplicate backups after OOMKill)
-# Returns 0 if recent backup found and uploaded, 1 if we should proceed with new backup
-check_recent_backup_uploaded() {
-    # Only check in azure or nas mode
-    if [ "$BACKUP_DEST" != "azure" ] && [ "$BACKUP_DEST" != "nas" ]; then
-        return 1
-    fi
-    
-    # Check if backup_chain.txt exists on NAS
-    if [ ! -f "${NAS_MANIFEST_DIR}/backup_chain.txt" ]; then
-        return 1
-    fi
-    
-    # Get the last backup from chain on NAS
-    local last_backup_line=$(tail -1 "${NAS_MANIFEST_DIR}/backup_chain.txt")
-    if [ -z "$last_backup_line" ]; then
-        return 1
-    fi
-    
-    # Parse backup name and timestamp
-    local last_backup_name=$(echo "$last_backup_line" | cut -d'|' -f1)
-    local last_backup_epoch=$(echo "$last_backup_line" | cut -d'|' -f3)
-    
-    if [ -z "$last_backup_name" ] || [ -z "$last_backup_epoch" ]; then
-        return 1
-    fi
-    
-    # Check if backup is recent (within last 4 hours)
-    local current_epoch=$(date +%s)
-    local backup_age=$((current_epoch - last_backup_epoch))
-    local max_age=1800  # 30 minutes in seconds
-    
-    if [ "$backup_age" -gt "$max_age" ]; then
-        return 1
-    fi
-    
-    # Recent backup found
-    log "Recent backup found: $last_backup_name (age: $((backup_age / 60)) minutes)"
-    log "Skipping new backup to prevent duplicates (pod likely restarted after OOMKill)"
-    return 0
-}
-
 # Main execution
 log "=========================================="
 log "PostgreSQL Incremental Backup to NAS"
