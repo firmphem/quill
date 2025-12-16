@@ -1,0 +1,76 @@
+tests:
+  - name: produce single payload with OK and FAILED metrics
+    steps:
+      - name: truncate db
+        type: golang
+        func: truncateDatabase
+
+      - name: recreate kafka topic
+        type: golang
+        func: recreateKafkaTopic
+
+      # each payload has at least 5 metrics
+      #  4 - valid
+      #  2 - invalid
+      #  rest are always valid
+      #  valid metrics are started from "valid-...."
+      #  invalid metrics are started from "invalid-...."
+      - name: produce payload
+        type: golang
+        func: producePayload
+        positional_args: [ 1, 6, -1, false, true ]
+
+      - name: run consumer
+        type: shell
+        func: ../quill --exit-after-n-messages 1 %CONFIG_FILE%
+        ignore_errors: true
+        print_output: false
+
+      - name: assert amount of valid metrics
+        type: sql
+        func: "select count(1) from metric"
+        assert:
+           condition: "="
+           expected: 4
+
+      - name: assert names of valid metrics
+        type: sql
+        func: "select count(1) from metric_name where name like 'valid-%'"
+        assert:
+           condition: "="
+           expected: 4
+
+      - name: assert device_id
+        type: sql
+        func: "select device_id from device"
+        assert:
+           condition: "="
+           expected: "device_id"
+
+      - name: assert group_ref
+        type: sql
+        func: "select group_id from group_ref"
+        assert:
+           condition: "="
+           expected: "group_id"
+
+      - name: assert edge_node
+        type: sql
+        func: "select edge_node_id from edge_node"
+        assert:
+           condition: "="
+           expected: "edge_id"
+
+      - name: assert failed payloads
+        type: sql
+        func: "select count(1) from sensor_errors"
+        assert:
+           condition: "="
+           expected: 1
+
+      - name: assert reason of failed payload
+        type: sql
+        func: "select reason from sensor_errors"
+        assert:
+           condition: "contains"
+           expected: "failed to process payload due to metric value"

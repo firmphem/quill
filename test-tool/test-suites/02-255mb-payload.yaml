@@ -1,0 +1,35 @@
+tests:
+  - name: test max size payload
+    steps:
+      - name: truncate db
+        type: golang
+        func: truncateDatabase
+
+      - name: recreate kafka topic
+        type: golang
+        func: recreateKafkaTopic
+
+      - name: produce payload
+        type: golang
+        func: producePayload
+        positional_args: [ 1, 100000, -1, false, false]
+
+      - name: run consumer to consume 1 message
+        type: shell
+        func: ../quill --exit-after-n-messages 1 %CONFIG_FILE%
+        ignore_errors: true
+        print_output: true
+
+      - name: assert amount of valid metrics
+        type: sql
+        func: "select count(1) from metric"
+        assert:
+           condition: "="
+           expected: 100000
+
+      - name: assert failed payloads
+        type: sql
+        func: "select count(1) from sensor_errors"
+        assert:
+           condition: "="
+           expected: 0

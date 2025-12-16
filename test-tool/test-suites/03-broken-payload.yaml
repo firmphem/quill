@@ -1,0 +1,49 @@
+tests:
+  - name: testing completely broken payload
+    steps:
+      - name: truncate db
+        type: golang
+        func: truncateDatabase
+
+      - name: recreate kafka topic
+        type: golang
+        func: recreateKafkaTopic
+
+      - name: produce broken payload
+        type: golang
+        func: producePayload
+        positional_args: [ 1, 1, -1, true, false ]
+
+      - name: run consumer to consume 1 message
+        type: shell
+        func: ../quill --exit-after-n-messages 1 %CONFIG_FILE%
+        ignore_errors: true
+        print_output: false
+
+      - name: assert amount of metrics
+        type: sql
+        func: "select count(1) from metric"
+        assert:
+           condition: "="
+           expected: 0
+
+      - name: assert amount of records in data_class
+        type: sql
+        func: "select count(1) from data_class"
+        assert:
+           condition: "="
+           expected: 0
+
+      - name: assert amount of failed messages
+        type: sql
+        func: "select count(1) from sensor_errors"
+        assert:
+           condition: "="
+           expected: 1
+
+      - name: assert reason of failed message
+        type: sql
+        func: "select reason from sensor_errors"
+        assert:
+           condition: "contains"
+           expected: 'failed to process payload due to json_unmarshal_failed'

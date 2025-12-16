@@ -191,6 +191,7 @@ func insertBatchTransactional(ctx context.Context, db *pgxpool.Pool, batch []Met
             group_id_no,
             type_no
         ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+        ON CONFLICT DO NOTHING
     `
 
 	for i := 0; i < len(batch); i += cfg.Quill.BatchSize {

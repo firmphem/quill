@@ -1,3 +1,6 @@
 ./debug/
 ./output/
 quill
+./build-and-run.sh
+./test-tool/test-tool
+./test-tool/build-and-run.sh

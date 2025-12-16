@@ -2,12 +2,16 @@ package main
 
 import (
 	"context"
+	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/rs/zerolog/log"
 )
+
+var commitsDoneAtomic atomic.Int32
 
 // -----------------------------------------------------------------------------
 func commitManager(ctx context.Context, partitionsMu *sync.Mutex, partitions map[int32]*partitionState, topic string, consumer *kafka.Consumer, ackCh <-chan Ack, commitDone chan struct{}) {
@@ -99,20 +103,26 @@ func commitManager(ctx context.Context, partitionsMu *sync.Mutex, partitions map
 					}}
 					if _, err := consumer.CommitOffsets(offsets); err != nil {
 						log.Error().Int32("partition", ack.Partition).Err(err).Msg("batch commit failed")
-
 					} else {
+						commitsDoneAtomic.Add(int32(ps.msgCount))
+
+						current := commitsDoneAtomic.Load()
+						if current >= exitAfterNMessages {
+							log.Warn().Msg("hard quit right after commit. not a graceful stop at all")
+							os.Exit(10)
+						}
+
 						ps.lastCommitted = ps.lastProcessed
 						ps.msgCount = 0
 						log.Debug().Int32("partition", ack.Partition).Int64("offset", int64(ps.lastCommitted+1)).Msg("batch was committed")
-
 					}
 				}
 				partitionsMu.Unlock()
 			}
 			s.end()
 
-		case <-commitTicker.C:
 			// time-based commit for all partitions
+		case <-commitTicker.C:
 			s := tracker.startStage("commit")
 			partitionsMu.Lock()
 			var offsets []kafka.TopicPartition
