@@ -17,14 +17,14 @@ quill:
   batch_timeout_seconds: 1s  # Max seconds to wait before inserting a partial batch
   channel_size: 4000
   kafka_offset_commit:
-     every_messages: 10
+     every_messages: 1
      every_milliseconds: 1000
 
 http:
   metrics_port: 8081
 
 logging:
-   level: INFO
+   level: DEBUG
 
 tracker:
    enabled: false

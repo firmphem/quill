@@ -1,7 +1,13 @@
-# here we will test the quill
-FROM golang:1.25-bookworm
+FROM debian:12-slim
 
-RUN apt-get update && apt-get install -y pkg-config ca-certificates git
+WORKDIR /app
 
-# Create workspace directory
-WORKDIR /workspace
+RUN apt-get update && apt-get install -y ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY quill /app/quill
+RUN chmod +x /app/quill
+
+EXPOSE 8081
+
+CMD ["/app/quill", "--config", "/app/config.yaml"]

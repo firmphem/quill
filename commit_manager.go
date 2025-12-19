@@ -106,10 +106,12 @@ func commitManager(ctx context.Context, partitionsMu *sync.Mutex, partitions map
 					} else {
 						commitsDoneAtomic.Add(int32(ps.msgCount))
 
-						current := commitsDoneAtomic.Load()
-						if current >= exitAfterNMessages {
-							log.Warn().Msg("hard quit right after commit. not a graceful stop at all")
-							os.Exit(10)
+						if exitAfterNMessages > 0 {
+							current := commitsDoneAtomic.Load()
+							if current >= exitAfterNMessages {
+								log.Warn().Msg("hard quit right after commit. not a graceful stop at all")
+								os.Exit(10)
+							}
 						}
 
 						ps.lastCommitted = ps.lastProcessed
