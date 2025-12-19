@@ -1,0 +1,87 @@
+version: '3.8'
+
+# we will start several containers
+# - rwe-postgres
+# - rwe-zk
+# - rwe-kafka
+# - rwe-kafka-init-topic  <-- temp. need just to create topics
+
+networks:
+  quill_network:
+    driver: bridge
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: rwe-postgres
+    environment:
+      POSTGRES_USER: quill
+      POSTGRES_PASSWORD: quill
+      POSTGRES_DB: quill
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker-data/quill-db-dump.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - quill_network
+    restart: unless-stopped
+
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: rwe-zk
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - quill_network
+    restart: unless-stopped
+
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: rwe-kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://rwe-kafka:9092
+      KAFKA_HEAP_OPTS: "-Xms1200m -Xmx1200m"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      - quill_network
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - zookeeper
+
+
+  kafka_init_topic:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: rwe-kafka-init-topic
+    networks:
+      - quill_network
+    environment:
+      KAFKA_METRIC_TOPIC: metrics
+    depends_on:
+      - kafka
+    restart: no
+    command: >
+      /bin/bash -c "
+        echo 'waiting for Kafka to start...'
+
+        kafka-broker-api-versions --bootstrap-server kafka:9092 --timeout 30000
+
+        echo 'creating metrics topic...'
+        kafka-topics --bootstrap-server rwe-kafka:9092 --create --if-not-exists --topic $$KAFKA_METRIC_TOPIC --partitions 12 --replication-factor 1
+
+        echo 'Topics creation complete.'
+      "
+
+volumes:
+  postgres_data:
+  kafka_data:
