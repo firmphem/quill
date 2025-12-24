@@ -45,6 +45,11 @@ type Config struct {
 	Tracker struct {
 		Enabled bool `yaml:"enabled"`
 	} `yaml:"tracker"`
+	Etcd struct {
+		Endpoints       []string `yaml:"endpoints"`
+		LeaseTTLSeconds int      `yaml:"leaseTTLSeconds"`
+		EtcdLeaderKey   string   `yaml:"etcdLeaderKey"`
+	} `yaml:"etcd"`
 }
 
 var configFile string

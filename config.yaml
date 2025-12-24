@@ -25,3 +25,11 @@ http:
 
 tracker:
    enabled: false
+
+etcd:
+  endpoints:
+    - 10.117.209.17:2379
+    - 10.117.209.18:2379
+    - 10.117.209.21:2379
+  leaseTTLSeconds: 120
+  etcdLeaderKey: 'quill/leader'

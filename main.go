@@ -37,6 +37,7 @@ var (
 	dedupMu sync.Mutex
 )
 
+// -----------------------------------------------------------------------------
 func init() {
 	var x int
 	log.Logger = setupLogging()
@@ -53,6 +54,7 @@ func init() {
 	log.Info().Msg(fmt.Sprintf("config file was set to '%v'", configFile))
 }
 
+// -----------------------------------------------------------------------------
 func setupLogging() zerolog.Logger {
 	zerolog.TimeFieldFormat = time.RFC3339
 
@@ -76,6 +78,7 @@ func setupLogging() zerolog.Logger {
 		Logger()
 }
 
+// -----------------------------------------------------------------------------
 func loadAndInitConfig() *Config {
 	cfg, err := loadConfig(configFile)
 	if err != nil {
@@ -89,6 +92,7 @@ func loadAndInitConfig() *Config {
 	return cfg
 }
 
+// -----------------------------------------------------------------------------
 func initKafkaConsumer(cfg *Config) *kafka.Consumer {
 	kcfg := &kafka.ConfigMap{
 		"bootstrap.servers":  strings.Join(cfg.Kafka.Brokers, ","),
@@ -105,18 +109,25 @@ func initKafkaConsumer(cfg *Config) *kafka.Consumer {
 	return consumer
 }
 
+// -----------------------------------------------------------------------------
 func main() {
 
 	cfg := loadAndInitConfig()
+
+	// global context to cancel everything
+	globalCtx, globalCancel := context.WithCancel(context.Background())
+	defer globalCancel()
+
+	// httpServer := startPrometheusEndpoint(globalCtx, dbPool)
+	httpServer := startPrometheusEndpoint(globalCtx)
+
+	waitForLeadership()
+
 	dbPool, err := createDBPool(cfg)
 	if err != nil {
 		log.Fatal().Err(err).Msg("DB connection failed")
 	}
 	defer dbPool.Close()
-
-	// global context to cancel everything
-	globalCtx, globalCancel := context.WithCancel(context.Background())
-	defer globalCancel()
 
 	tracker = newTracker(globalCtx, time.Second*10, log.Logger)
 	if cfg.Tracker.Enabled {
@@ -164,8 +175,6 @@ func main() {
 		partitionsMu.Unlock()
 		w.start(dbPool, ackCh)
 	}
-
-	httpServer := startPrometheusEndpoint(globalCtx, dbPool)
 
 	// some rebalance magic happens here
 	err = mainConsumer.Subscribe(topic, func(consumer *kafka.Consumer, ev kafka.Event) error {
