@@ -2,4 +2,4 @@
 
 echo "options: $@"
 
-go build -buildvcs=false . && ./quill $@
+go build -buildvcs=false . && ./quill --config config-docker.yaml $@

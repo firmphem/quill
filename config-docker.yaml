@@ -28,3 +28,9 @@ logging:
 
 tracker:
    enabled: false
+
+etcd:
+  endpoints:
+    - rwe-etcd:2379
+  leaseTTLSeconds: 60
+  etcdLeaderKey: 'quill/leader'

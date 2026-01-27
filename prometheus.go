@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
@@ -23,6 +22,10 @@ import (
 var datapointsReceivedAtomic atomic.Uint64
 
 var (
+	isInstanceLeader = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "quill_is_leader",
+		Help: "Whether this instance is currently the leader (1 = leader, 0 = not leader)",
+	})
 	messagesTotal = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "quill_messages_total",
 		Help: "Total number of sensor datapoints processed",
@@ -34,11 +37,6 @@ var (
 	errorsTotal = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "quill_errors_total",
 		Help: "Total number of DB insert errors",
-	})
-	batchSizeHist = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Name:    "quill_batch_size",
-		Help:    "Distribution of batch sizes inserted",
-		Buckets: prometheus.LinearBuckets(100, 500, 10),
 	})
 	retriesTotal = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "quill_retries_total",
@@ -81,23 +79,24 @@ var (
 )
 
 // -----------------------------------------------------------------------------
-func startPrometheusEndpoint(ctx context.Context, dbPool *pgxpool.Pool) *http.Server {
+// func startPrometheusEndpoint(ctx context.Context, dbPool *pgxpool.Pool) *http.Server {
+func startPrometheusEndpoint(ctx context.Context) *http.Server {
 	cfg := currentConfig.Load().(*Config)
 
 	prometheus.MustRegister(
-		messagesTotal, batchesTotal, errorsTotal, batchSizeHist, retriesTotal,
+		isInstanceLeader, messagesTotal, batchesTotal, errorsTotal, retriesTotal,
 		rowsInsertedTotal, rowsFailedTotal, rowsEnqueued,
 		messagesReceivedTotal, rowsReceivedTotal, datapointsReceivedTotal, offsetsCommittedTotal, serviceUptimeSeconds,
 	)
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		if err := dbPool.Ping(ctx); err != nil {
-			http.Error(w, "DB not ready", http.StatusServiceUnavailable)
-			return
-		}
-		w.Write([]byte("ok"))
-	})
+	// mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+	// 	if err := dbPool.Ping(ctx); err != nil {
+	// 		http.Error(w, "DB not ready", http.StatusServiceUnavailable)
+	// 		return
+	// 	}
+	// 	w.Write([]byte("ok"))
+	// })
 
 	httpAddr := fmt.Sprintf("0.0.0.0:%d", cfg.HTTP.MetricsPort)
 	httpServer := &http.Server{
@@ -142,8 +141,11 @@ func startPrometheusEndpoint(ctx context.Context, dbPool *pgxpool.Pool) *http.Se
 	return httpServer
 }
 
-func startHTTP(ctx context.Context, dbPool *pgxpool.Pool) *http.Server {
-	return startPrometheusEndpoint(ctx, dbPool)
+//	func startHTTP(ctx context.Context, dbPool *pgxpool.Pool) *http.Server {
+//		return startPrometheusEndpoint(ctx, dbPool)
+//	}
+func startHTTP(ctx context.Context) *http.Server {
+	return startPrometheusEndpoint(ctx)
 }
 
 func gracefulHTTPShutdown(server *http.Server) {

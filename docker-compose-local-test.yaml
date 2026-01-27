@@ -82,6 +82,28 @@ services:
         echo 'Topics creation complete.'
       "
 
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.15
+    container_name: rwe-etcd
+    ports:
+      - "2379:2379"
+      - "2380:2380"
+    command:
+      - /usr/local/bin/etcd
+      - --name=etcd-single
+      - --data-dir=/etcd-data
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://rwe-etcd:2379
+      - --initial-advertise-peer-urls=http://rwe-etcd:2380
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-cluster=etcd-single=http://rwe-etcd:2380
+      - --initial-cluster-state=new
+    volumes:
+      - etcd_data:/etcd-data
+    networks:
+      - quill_network
+
 volumes:
   postgres_data:
   kafka_data:
+  etcd_data:
