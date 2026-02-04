@@ -3,12 +3,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
@@ -54,6 +56,8 @@ type Config struct {
 
 var configFile string
 
+const kafkaTopicPattern = "%KAFKA_TOPIC%"
+
 // -----------------------------------------------------------------------------
 func loadConfig(path string) (*Config, error) {
 	file, err := os.Open(path)
@@ -80,6 +84,13 @@ func loadConfig(path string) (*Config, error) {
 	if exitAfterNMessages > 0 {
 		config.Quill.KafkaOffsetCommit.EveryMessages = 1
 		config.Quill.KafkaOffsetCommit.EveryMilliseconds = 500000
+	}
+
+	if strings.Index(config.Etcd.EtcdLeaderKey, kafkaTopicPattern) > -1 {
+		config.Etcd.EtcdLeaderKey = strings.Replace(config.Etcd.EtcdLeaderKey, kafkaTopicPattern, config.Kafka.Topic, -1)
+	}
+	if strings.Index(config.Kafka.GroupID, kafkaTopicPattern) > -1 {
+		config.Kafka.GroupID = strings.Replace(config.Kafka.GroupID, kafkaTopicPattern, config.Kafka.Topic, -1)
 	}
 
 	return config, nil
@@ -116,4 +127,18 @@ func applyLogLevel(cfg *Config) {
 	}
 	log.WithLevel(zerolog.NoLevel).
 		Msgf("log level is currently set to: %s", zerolog.GlobalLevel().String())
+}
+
+// -----------------------------------------------------------------------------
+func validateKafkaTopicAgainstPrevConsumed(ctx context.Context, dbPool *pgxpool.Pool, metaKey string, expectedTopic string) string {
+	storedTopic, err := geCurrentMetadataValue(ctx, dbPool, metaKey)
+	if err != nil {
+		log.Fatal().Err(err).Msg("we cannot check if run consumer for the same topic or not. exiting...")
+	}
+
+	if storedTopic != "" && storedTopic != expectedTopic {
+		log.Fatal().Msgf("previously this database was used to consume data from topic '%s' while wanted to consume from '%s'. exiting...", storedTopic, expectedTopic)
+	}
+
+	return storedTopic
 }
