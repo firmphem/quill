@@ -3,7 +3,7 @@ kafka:
     - "10.117.209.25:9092"
     - "10.117.209.26:9092"
   topic: "metrics"      # Replace with your Kafka topic
-  group_id: "quill-consumer-group"
+  group_id: "quill-consumer-group-%KAFKA_TOPIC%"
 
 database:
   host: "10.117.209.17"         # Replace with your TimescaleDB host
@@ -32,4 +32,4 @@ etcd:
     - 10.117.209.18:2379
     - 10.117.209.21:2379
   leaseTTLSeconds: 120
-  etcdLeaderKey: 'quill/leader'
+  etcdLeaderKey: 'quill/%KAFKA_TOPIC%/leader'

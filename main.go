@@ -52,6 +52,7 @@ func init() {
 		configFile = "config.yaml"
 	}
 	log.Info().Msg(fmt.Sprintf("config file was set to '%v'", configFile))
+
 }
 
 // -----------------------------------------------------------------------------
@@ -111,23 +112,37 @@ func initKafkaConsumer(cfg *Config) *kafka.Consumer {
 
 // -----------------------------------------------------------------------------
 func main() {
-
 	cfg := loadAndInitConfig()
 
 	// global context to cancel everything
 	globalCtx, globalCancel := context.WithCancel(context.Background())
 	defer globalCancel()
 
-	// httpServer := startPrometheusEndpoint(globalCtx, dbPool)
 	httpServer := startPrometheusEndpoint(globalCtx)
-
-	waitForLeadership()
 
 	dbPool, err := createDBPool(cfg)
 	if err != nil {
 		log.Fatal().Err(err).Msg("DB connection failed")
 	}
 	defer dbPool.Close()
+
+	if err := createConsmumerMetadataTable(globalCtx, dbPool); err != nil {
+		log.Error().Err(err).Msg("cannot create a metadata table for consumer. exiting...")
+		os.Exit(1)
+	}
+
+	// this is just a pre-check if we consume from the correct topic
+	validateKafkaTopicAgainstPrevConsumed(globalCtx, dbPool, topicName, cfg.Kafka.Topic)
+
+	waitForLeadership()
+
+	// this is a post-check in order to make sure that new leader will consume from the right topic
+	currentStoredTopic := validateKafkaTopicAgainstPrevConsumed(globalCtx, dbPool, topicName, cfg.Kafka.Topic)
+	if currentStoredTopic == "" {
+		if err := setMetadataValue(globalCtx, dbPool, topicName, cfg.Kafka.Topic); err != nil {
+			log.Fatal().Err(err).Msg("cannot update the metadata table")
+		}
+	}
 
 	tracker = newTracker(globalCtx, time.Second*10, log.Logger)
 	if cfg.Tracker.Enabled {

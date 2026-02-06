@@ -3,7 +3,7 @@ kafka:
   brokers:
     - rwe-kafka:9092
   topic: "metrics"      # Replace with your Kafka topic
-  group_id: "quill-consumer-group"
+  group_id: "quill-consumer-group-%KAFKA_TOPIC%"
 
 database:
   host: rwe-postgres
@@ -33,4 +33,4 @@ etcd:
   endpoints:
     - rwe-etcd:2379
   leaseTTLSeconds: 60
-  etcdLeaderKey: 'quill/leader'
+  etcdLeaderKey: 'quill/%KAFKA_TOPIC%/leader'
