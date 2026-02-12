@@ -43,7 +43,9 @@ type MetricRow struct {
 	MetricTimestamp time.Time // derived from metric.timestamp
 	// PayloadTimestamp time.Time // derived from payload.timestamp
 	//DataType         string    // "Float", "Int32", etc.
-	Value float64
+	// Value float64
+	ValueF *float64
+	ValueI *int
 
 	// Foreign-key integer references (no actual DB FKs for speed)
 	MetricNameNo int
@@ -55,7 +57,7 @@ type MetricRow struct {
 	// Kafka tracking
 	Partition int
 	Offset    int64
-	Msg       kafka.Message // ✅ keep the original Kafka message
+	Msg       kafka.Message
 	DedupKey  string
 }
 

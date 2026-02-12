@@ -2,7 +2,7 @@
 kafka:
   brokers:
     - rwe-kafka:9092
-  topic: "metrics"      # Replace with your Kafka topic
+  topic: "metrics1"      # Replace with your Kafka topic
   group_id: "quill-consumer-group-%KAFKA_TOPIC%"
 
 database:
@@ -24,7 +24,7 @@ http:
   metrics_port: 8081
 
 logging:
-   level: INFO
+   level: DEBUG
 
 tracker:
    enabled: false
@@ -32,5 +32,5 @@ tracker:
 etcd:
   endpoints:
     - rwe-etcd:2379
-  leaseTTLSeconds: 10
+  leaseTTLSeconds: 60
   etcdLeaderKey: 'quill/%KAFKA_TOPIC%/leader'

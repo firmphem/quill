@@ -43,7 +43,7 @@ type KafkaMessage struct {
 }
 
 func randomDataType(rng *rand.Rand) string {
-	types := []string{"Float", "Double", "Int32"}
+	types := []string{"Float", "Double", "Int32", "Bool"}
 	return types[rng.Intn(len(types))]
 }
 
@@ -75,9 +75,14 @@ func generateMessage(nodeID, metricCount, seq int, rng *rand.Rand) ([]byte, erro
 		}
 		switch metrics[i].DataType {
 		case "Float", "Double":
+			fmt.Println("float")
 			metrics[i].Value = rng.Float64() * 100000
 		case "Int32":
+			fmt.Println("int")
 			metrics[i].Value = rng.Intn(100000)
+		case "Bool":
+			fmt.Println("bool")
+			metrics[i].Value = rng.Intn(2) == 0
 		}
 	}
 

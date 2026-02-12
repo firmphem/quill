@@ -82,7 +82,8 @@ func insertBatchCopy(ctx context.Context, db *pgxpool.Pool, batch []MetricRow, w
 	for i, r := range batch {
 		rows[i] = []interface{}{
 			r.MetricTimestamp.UnixMilli(), // metric_timestamp (BIGINT)
-			r.Value,                       // value
+			r.ValueF,                      // valueF
+			r.ValueI,                      // valueI
 			r.MetricNameNo,                // metric_name_no
 			r.DeviceIDNo,                  // device_id_no
 			r.NodeIDNo,                    // node_id_no
@@ -101,7 +102,8 @@ func insertBatchCopy(ctx context.Context, db *pgxpool.Pool, batch []MetricRow, w
 		pgx.Identifier{"metric"},
 		[]string{
 			"metric_timestamp",
-			"value",
+			"value_f",
+			"value_i",
 			"metric_name_no",
 			"device_id_no",
 			"node_id_no",
@@ -184,13 +186,14 @@ func insertBatchTransactional(ctx context.Context, db *pgxpool.Pool, batch []Met
 	insertSQL := `
         INSERT INTO metric (
             metric_timestamp,
-            value,
+            value_f,
+            value_i,
             metric_name_no,
             device_id_no,
             node_id_no,
             group_id_no,
             type_no
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
         ON CONFLICT DO NOTHING
     `
 
@@ -206,7 +209,8 @@ func insertBatchTransactional(ctx context.Context, db *pgxpool.Pool, batch []Met
 		for _, r := range rows {
 			b.Queue(insertSQL,
 				r.MetricTimestamp.UnixMilli(),
-				r.Value,
+				r.ValueF,
+				r.ValueI,
 				r.MetricNameNo,
 				r.DeviceIDNo,
 				r.NodeIDNo,
