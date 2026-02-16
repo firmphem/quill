@@ -38,6 +38,9 @@ BACKUP_COMPRESSION="${BACKUP_COMPRESSION:-zstd}"  # gzip (PG14+) or zstd (PG17+)
 UPLOAD_RETRY_ATTEMPTS="${UPLOAD_RETRY_ATTEMPTS:-3}"  # Number of upload retry attempts
 UPLOAD_RETRY_DELAY="${UPLOAD_RETRY_DELAY:-10}"       # Seconds to wait between retries
 
+# Prometheus metrics (PMM2 textfile collector)
+PROMETHEUS_METRICS_FILE="${PROMETHEUS_METRICS_FILE:-/usr/local/percona/pmm2/collectors/textfile-collector/high-resolution/backup.prom}"
+
 # NAS directories (backups go directly to NAS)
 NAS_BASE_DIR="${NAS_BACKUP_PATH}/${BACKUP_NAMESPACE}"
 NAS_LOG_DIR="${NAS_BASE_DIR}/logs"
@@ -118,7 +121,7 @@ get_compression_flag() {
             echo "--gzip"
             ;;
         zstd)
-            echo "--compress=zstd"
+            echo "--compress=server-zstd:level=1,workers=12"
             ;;
         *)
             log "WARNING: Unknown compression format '$BACKUP_COMPRESSION', defaulting to gzip"
@@ -127,11 +130,65 @@ get_compression_flag() {
     esac
 }
 
+# Write Prometheus metrics for backup status (success=1, failure=0)
+# Uses textfile collector format; write to .tmp then rename for atomicity
+write_prometheus_metrics() {
+    local status="$1"  # 1 = success, 0 = failure
+    local end_ts="${2:-$(date +%s)}"
+    local duration_seconds="${3:-0}"
+    local backup_type_label="${4:-unknown}"
+    local size_bytes="${5:-0}"
+    local namespace="${BACKUP_NAMESPACE:-unknown}"
+    local metrics_dir
+    metrics_dir=$(dirname "$PROMETHEUS_METRICS_FILE")
+    local metrics_tmp="${PROMETHEUS_METRICS_FILE}.$$.tmp"
+    if [ ! -d "$metrics_dir" ]; then
+        log "WARNING: Prometheus metrics directory does not exist: $metrics_dir (skipping metrics)"
+        return 0
+    fi
+    if ! cat > "$metrics_tmp" << EOF
+# HELP pg_backup_status Last backup status (1=success, 0=failure)
+# TYPE pg_backup_status gauge
+pg_backup_status{namespace="${namespace}"} ${status}
+# HELP pg_backup_last_run_timestamp_seconds Unix timestamp of last backup run
+# TYPE pg_backup_last_run_timestamp_seconds gauge
+pg_backup_last_run_timestamp_seconds{namespace="${namespace}"} ${end_ts}
+# HELP pg_backup_duration_seconds Duration of last backup in seconds
+# TYPE pg_backup_duration_seconds gauge
+pg_backup_duration_seconds{namespace="${namespace}"} ${duration_seconds}
+# HELP pg_backup_last_success_timestamp_seconds Unix timestamp of last successful backup
+# TYPE pg_backup_last_success_timestamp_seconds gauge
+pg_backup_last_success_timestamp_seconds{namespace="${namespace}"} $([ "$status" = "1" ] && echo "${end_ts}" || echo "0")
+# HELP pg_backup_last_failure_timestamp_seconds Unix timestamp of last failed backup
+# TYPE pg_backup_last_failure_timestamp_seconds gauge
+pg_backup_last_failure_timestamp_seconds{namespace="${namespace}"} $([ "$status" = "0" ] && echo "${end_ts}" || echo "0")
+# HELP pg_backup_type_last Last backup type (1 for type indicated by label)
+# TYPE pg_backup_type_last gauge
+pg_backup_type_last{namespace="${namespace}",type="${backup_type_label}"} 1
+# HELP pg_backup_size_bytes Size of last backup in bytes
+# TYPE pg_backup_size_bytes gauge
+pg_backup_size_bytes{namespace="${namespace}"} ${size_bytes}
+EOF
+    then
+        log "WARNING: Failed to write Prometheus metrics"
+        rm -f "$metrics_tmp"
+        return 1
+    fi
+    mv -f "$metrics_tmp" "$PROMETHEUS_METRICS_FILE" 2>/dev/null || true
+    log "Prometheus metrics written to $PROMETHEUS_METRICS_FILE (status=$status)"
+    return 0
+}
+
 # Function to cleanup on exit
 cleanup() {
     local exit_code=$?
     if [ $exit_code -ne 0 ]; then
         log "ERROR: Backup failed with exit code $exit_code"
+        # Write failure metrics if we have a metrics path and directory exists
+        local end_ts=$(date +%s)
+        local duration=0
+        [ -n "${BACKUP_START_TIME:-}" ] && duration=$((end_ts - BACKUP_START_TIME))
+        write_prometheus_metrics "0" "$end_ts" "$duration" "unknown" "0" 2>/dev/null || true
     fi
     exit $exit_code
 }
@@ -295,6 +352,7 @@ create_full_backup() {
     
     # Calculate size
     BACKUP_SIZE=$(du -sh "$NAS_FULL_BACKUP_PATH" | cut -f1)
+    BACKUP_SIZE_BYTES=$(du -sb "$NAS_FULL_BACKUP_PATH" 2>/dev/null | cut -f1 || echo "0")
     log "Backup size: $BACKUP_SIZE"
     
     # Update backup chain on NAS
@@ -379,6 +437,7 @@ create_incremental_backup() {
     
     # Calculate size
     BACKUP_SIZE=$(du -sh "$NAS_INCREMENTAL_BACKUP_PATH" | cut -f1)
+    BACKUP_SIZE_BYTES=$(du -sb "$NAS_INCREMENTAL_BACKUP_PATH" 2>/dev/null | cut -f1 || echo "0")
     log "Backup size: $BACKUP_SIZE"
     
     # Update backup chain on NAS
@@ -502,18 +561,13 @@ cleanup_old_backups() {
 }
 
 # Main execution
+BACKUP_START_TIME=$(date +%s)
 log "=========================================="
 log "PostgreSQL Incremental Backup to NAS"
 log "=========================================="
 log "Timestamp: $TIMESTAMP"
 log "Destination: NAS -> ${NAS_BACKUP_PATH}/${BACKUP_NAMESPACE}"
 log ""
-
-# Check if we have a recent backup (prevent duplicates after OOMKill)
-if check_recent_backup; then
-    log "Recent backup found - exiting without taking new backup"
-    exit 0
-fi
 
 # Determine backup type if auto
 ACTUAL_BACKUP_TYPE=$(determine_backup_type)
@@ -534,9 +588,9 @@ case "$ACTUAL_BACKUP_TYPE" in
 esac
 
 # Cleanup old backups on NAS (keep only current chain)
-if ! cleanup_old_backups; then
-    log "WARNING: Cleanup function encountered issues, but backup was successful"
-fi
+#if ! cleanup_old_backups; then
+#    log "WARNING: Cleanup function encountered issues, but backup was successful"
+#fi
 
 # Cleanup old logs and manifests on NAS
 log ""
@@ -560,6 +614,11 @@ fi
 log "Log File: $LOG_FILE"
 log "Status: ✓ SUCCESS"
 log "=========================================="
+
+# Write Prometheus metrics for successful backup
+BACKUP_END_TIME=$(date +%s)
+BACKUP_DURATION=$((BACKUP_END_TIME - BACKUP_START_TIME))
+write_prometheus_metrics "1" "$BACKUP_END_TIME" "$BACKUP_DURATION" "$ACTUAL_BACKUP_TYPE" "${BACKUP_SIZE_BYTES:-0}" 2>/dev/null || true
 
 exit 0
 
