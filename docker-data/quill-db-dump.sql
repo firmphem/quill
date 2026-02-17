@@ -223,7 +223,8 @@ ALTER SEQUENCE public.group_ref_group_id_no_seq OWNED BY public.group_ref.group_
 
 CREATE TABLE public.metric (
     metric_timestamp bigint NOT NULL,
-    value double precision NOT NULL,
+    value_f double precision NULL,
+    value_i integer NULL,
     device_id_no integer NOT NULL,
     node_id_no integer NOT NULL,
     group_id_no integer NOT NULL,

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -195,19 +196,7 @@ func (pw *PartitionWorker) processMessageNew(m *kafka.Message, db *pgxpool.Pool)
 	for _, metric := range km.Payload.Metrics {
 		// (a) numeric value conversion
 		//val, ok := toFloat64(metric.Value)
-		var val float64
-		var ok bool
-
-		switch v := metric.Value.(type) {
-		case bool:
-			val = 0.0
-			if v {
-				val = 1.0
-			}
-			ok = true
-		default:
-			val, ok = toFloat64(v)
-		}
+		valF, valI, ok := parseMetricValue(metric.Value)
 
 		if !ok {
 			customError = fmt.Errorf("failed to process payload due to metric value: %v", metric.Value)
@@ -232,9 +221,11 @@ func (pw *PartitionWorker) processMessageNew(m *kafka.Message, db *pgxpool.Pool)
 		}
 
 		// build the MetricRow for DB insertion
+
 		row := MetricRow{
 			MetricTimestamp: time.UnixMilli(metric.Timestamp),
-			Value:           val,
+			ValueF:          valF,
+			ValueI:          valI,
 
 			MetricNameNo: metricNameID,
 			DeviceIDNo:   deviceID,
@@ -264,4 +255,33 @@ func (pw *PartitionWorker) processMessageNew(m *kafka.Message, db *pgxpool.Pool)
 	}
 
 	return customError
+}
+
+// -----------------------------------------------------------------------------
+func parseMetricValue(v interface{}) (valF *float64, valI *int, ok bool) {
+	if v == nil {
+		return nil, nil, false
+	}
+
+	if b, isBool := v.(bool); isBool {
+		var i int
+		if b {
+			i = 1
+		} else {
+			i = 0
+		}
+		return nil, &i, true
+	}
+
+	f, isFloat := v.(float64)
+	if !isFloat {
+		return nil, nil, false
+	}
+
+	if f == math.Trunc(f) {
+		i := int(f)
+		return nil, &i, true
+	}
+
+	return &f, nil, true
 }
