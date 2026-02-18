@@ -1,0 +1,82 @@
+#!/bin/bash
+set -x
+set -o pipefail
+
+# Configuration
+PG_USER="{{ postgresql_replica_user }}"
+PG_PASSWORD="{{ postgresql_replica_password }}"
+PG_HOST="127.0.0.1"
+PG_PORT="{{ postgresql_port }}"
+BACKUP_BASE_DIR="{{ postgresql_backup_folder }}"
+BACKUP_DIR="${BACKUP_BASE_DIR}/$(date +%Y%m%d_%H%M%S)"
+LOG_FILE="${BACKUP_BASE_DIR}/pg_basebackup.log"
+RETENTION_DAYS={{ postgresql_backup_retention }}  # Number of days to keep backups
+MAX_RATE={{ postgresql_basebackup_max_rate }} # Limit pg_basebackup to not saturate the instance
+
+LOCKFILE="/tmp/pg_base_backup_full.lock"
+TIMEOUT=15
+
+# Log function
+log_message() {
+    echo "$(date +"%Y-%m-%d %H:%M:%S") - $1" >> "${LOG_FILE}"
+}
+
+get_full_backup() {
+# Export the password for pg_basebackup
+export PGPASSWORD="${PG_PASSWORD}"
+# Ensure the backup base directory exists
+log_message "Ensuring backup base directory exists: ${BACKUP_BASE_DIR}"
+mkdir -p "${BACKUP_BASE_DIR}"
+if [ $? -eq 0 ]; then
+    log_message "Backup base directory ensured."
+else
+    log_message "Failed to create or ensure backup base directory."
+    exit 1
+fi
+
+# Perform the backup and compress in a single pipe
+log_message "Starting pg_basebackup with compression to: ${BACKUP_DIR}"
+pg_basebackup -h "${PG_HOST}" --max-rate=${MAX_RATE} -p "${PG_PORT}" -U "${PG_USER}" -D "${BACKUP_DIR}" -F tar --compress=client-zstd:6 -X stream -P >> "${LOG_FILE}" 2>&1
+
+if [ $? -eq 0 ]; then
+    log_message "pg_basebackup with compression completed successfully."
+else
+    log_message "pg_basebackup with compression failed."
+    exit 1
+fi
+
+Remove backups older than RETENTION_DAYS
+log_message "Removing backups older than ${RETENTION_DAYS} days from ${BACKUP_BASE_DIR}."
+find "${BACKUP_BASE_DIR}" -depth -mindepth 1 -type d -mtime +${RETENTION_DAYS} -exec rm -rf {} + >> "${LOG_FILE}" 2>&1
+
+if [ $? -eq 0 ]; then
+    log_message "Old backups removed successfully."
+else
+    log_message "Failed to remove old backups."
+    exit 1
+fi
+
+log_message "Backup process completed successfully."
+
+# Unset the password for security reasons
+unset PGPASSWORD
+
+}
+
+
+# Create the lockfile.
+touch $LOCKFILE
+
+# Create a file descriptor over the given lockfile.
+exec {FD}<>$LOCKFILE
+
+# Try to lock the file descriptor $FD (wait for $TIMEOUT seconds).
+# If it fails exit with an error.
+# Otherwise, the lock is acquired and implicitly dropped at the end of the script.
+if ! flock -x -w $TIMEOUT $FD; then
+  log_message "Failed to obtain a lock within $TIMEOUT seconds"
+  log_message "Another instance of `basename $0` is probably running."
+  exit 1
+else
+  get_full_backup
+fi

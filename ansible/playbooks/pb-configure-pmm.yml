@@ -1,0 +1,9 @@
+# pb-configure.yml
+---
+- name: Install PMM Server
+  hosts: pmm_server
+  become: yes
+  roles:
+    - pmm-server
+
+

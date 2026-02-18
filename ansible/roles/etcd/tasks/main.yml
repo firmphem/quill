@@ -1,0 +1,44 @@
+---
+# tasks file for etcd
+
+- name: Ensure etcd config directory exists
+  file:
+    path: "{{ etcd_config_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0750'
+
+- name: Install etcd Config 
+  template:
+    src: etcd.conf.j2
+    dest: "{{ etcd_config_path }}"
+    owner: root
+    group: root
+    mode: 0755        
+
+- name: Install dependent packages
+  apt:
+    name:
+      - python3-etcd # required for patroni & etcd connection
+    update_cache: yes
+    state: present
+  
+- name: Gather package facts
+  package_facts:
+    manager: "auto"
+
+- name: Download and Install etcd if not installed
+  apt:
+    name: etcd-server
+    state: present
+  when: "'etcd-server' not in ansible_facts.packages"  # Check for any PostgreSQL package
+
+- name: Ensure etcd service is started and enabled
+  service:
+    name: etcd
+    state: started
+    enabled: yes
+  when: not ansible_check_mode
+
+

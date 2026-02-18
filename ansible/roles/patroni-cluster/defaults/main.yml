@@ -1,0 +1,12 @@
+---
+# defaults file for patroni-cluster
+
+patroni_version: 4.0.4-1PGDG.rhel9
+patroni_config_path: /etc/patroni/patroni.yml
+
+postgresql_version: 18
+postgresql_repo_url: https://download.postgresql.org/pub/repos/yum/reporpms/EL-9-aarch64/pgdg-redhat-repo-latest.noarch.rpm
+postgresql_gpg_key_url: https://download.postgresql.org/pub/repos/yum/keys/PGDG-RPM-GPG-KEY-AARCH64-RHEL 
+
+postgresql_wal_archives_utility_path: /etc/patroni/clear_wal_archives.sh
+postgresql_backup_utility_path: /etc/patroni/full_backup.sh

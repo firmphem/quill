@@ -1,0 +1,12 @@
+*.retry
+#*#
+.#*
+*.*~
+*.bak
+*.swp
+._*
+.DS_Store
+vault.password
+roles/*/tests/.vagrant/
+vagrant-inventories/*/.vagrant/
+roles/*/molecule/*/tests/__pycache__/

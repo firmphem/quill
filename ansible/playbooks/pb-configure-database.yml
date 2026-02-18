@@ -1,0 +1,14 @@
+# pb-configure-database.yml
+---
+
+- name: Install PostgreSQL Components
+  hosts: postgresql
+  become: yes
+  roles:
+    - role: etcd
+      tags: etcd
+    - role: haproxy
+      tags: haproxy
+    - role: patroni-cluster
+      tags: postgres
+

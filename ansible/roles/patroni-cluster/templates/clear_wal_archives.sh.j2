@@ -1,0 +1,26 @@
+#!/bin/bash
+
+# Define variables
+LOG_DIR="{{ postgresql_wal_archive_path }}"
+RETENTION_DAYS={{ postgresql_wal_archive_retention }}  # Number of days to retain logs
+
+# Function to clear old archive logs
+cleanup_logs() {
+    echo "Starting cleanup of PostgreSQL archive logs..."
+    echo "Log Directory: $LOG_DIR"
+    echo "Retention Period: $RETENTION_DAYS days"
+
+    # Check if the log directory exists
+    if [ ! -d "$LOG_DIR" ]; then
+        echo "Error: Log directory $LOG_DIR does not exist. Exiting."
+        exit 1
+    fi
+
+    # Find and delete logs older than the retention period
+    find "$LOG_DIR" -type f -mtime +$RETENTION_DAYS -exec rm -f {} \;
+
+    echo "Cleanup completed successfully."
+}
+
+# Execute the cleanup function
+cleanup_logs

@@ -1,0 +1,70 @@
+---
+# tasks file for pmm-server
+
+- name: Install dependent packages
+  apt:
+    name:
+      - python3-pip 
+      - ca-certificates 
+      - curl
+    state: present
+
+- name: Create directory for apt keyrings
+  file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+
+- name: Download Docker GPG key
+  get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    mode: '0644'
+
+#- name: Add Docker repository to Apt sources
+#  apt_repository:
+#    repo: "deb [arch={{ ansible_architecture }} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_lsb.codename }} stable"
+#    state: present
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+
+- name: Install Docker and related packages
+  apt:
+    name:
+      - docker-ce 
+      - docker-ce-cli 
+      - containerd.io 
+      - docker-buildx-plugin 
+      - docker-compose-plugin
+    state: present
+
+- name: Start Docker service
+  service:
+    name: docker
+    state: started
+    enabled: yes
+
+- name: Pull PMM Server Docker image
+  docker_image:
+    name: "{{ pmm_server_image }}"
+    tag: "{{ pmm_server_image_tag }}"
+    source: pull
+
+- name: Create Docker volume for PMM data
+  docker_volume:
+    name: pmm-data
+    state: present
+
+- name: Run PMM Server container
+  docker_container:
+    name: pmm-server
+    image: "{{ pmm_server_image }}:{{ pmm_server_image_tag }}"
+    state: started
+    restart_policy: always
+    published_ports:
+      - "443:443"
+    volumes:
+      - /srv:/srv
+

@@ -1,0 +1,38 @@
+# WARNING: This file is automatically managed by Ansible. 
+# Any manual changes will be overwritten during the next deployment.
+
+# Global settings
+global
+    log stdout format raw local0
+    maxconn {{ haproxy_max_conenctions }}
+    daemon
+
+# Default settings
+defaults
+    log global
+    option dontlog-normal
+    option dontlognull
+    timeout connect {{ haproxy_connect_timeout }}s
+    timeout client {{ haproxy_client_timeout }}s
+    timeout server {{ haproxy_client_timeout }}s
+    retries 3
+
+# Combined frontend/backend for PostgreSQL
+listen postgresql
+    bind *:{{ haproxy_listen_port }}
+    mode tcp
+    option httpchk GET /master
+    http-check expect status 200
+{% for host in groups['postgresql'] %}
+    server psql-{{ loop.index }} {{ hostvars[host].server_local_ip }}:{{ postgresql_port }} check port 8008 inter {{ haproxy_inter }}s downinter {{ haproxy_downinter }}s rise {{ haproxy_rise }} fall {{ haproxy_fail }} on-marked-down shutdown-sessions
+{% endfor %}
+    option tcpka
+
+# Listen for HAProxy Stats
+listen stats
+    bind *:7000
+    mode http
+    stats enable
+    stats uri /
+    stats refresh 10s
+    stats auth {{ haproxy_stats_admin }}:{{ haproxy_stats_password }}

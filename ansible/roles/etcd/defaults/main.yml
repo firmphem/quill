@@ -1,0 +1,5 @@
+---
+# defaults file for etcd
+etcd_config_path: /etc/default/etcd
+
+postgresql_repo_url: https://download.postgresql.org/pub/repos/yum/reporpms/EL-9-x86_64/pgdg-redhat-repo-latest.noarch.rpm

@@ -1,0 +1,25 @@
+#!/bin/bash
+
+# Define the Patroni endpoint URL
+PATRONI_URL="http://{{ ansible_default_ipv4.address }}:{{ patroni_rest_port }}/master"
+
+# Query the Patroni API and check if the role is "primary"
+response=$(curl -s "$PATRONI_URL")
+
+# Check if curl encountered an error
+if [[ $? -ne 0 ]]; then
+    echo "ERROR: Failed to query Patroni API at $PATRONI_URL"
+    exit 1
+fi
+
+# Check if the response is valid and if the role is "primary"
+role=$(echo "$response" | jq -r '.role')
+
+if [[ "$role" == "primary" ]]; then
+    # If the role is "primary", return success
+    exit 0
+else
+    # If the role is not "primary", return error
+    echo "ERROR: Role is '$role' but 'primary' is required."
+    exit 2
+fi

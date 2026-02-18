@@ -1,0 +1,157 @@
+# HAProxy Variables
+haproxy_max_conenctions: 4096
+haproxy_client_timeout: 10800
+haproxy_server_timeout: 10800
+haproxy_connect_timeout: 5
+haproxy_listen_port: 5433
+haproxy_inter: 2
+haproxy_downinter: 2
+haproxy_rise: 2
+haproxy_fail: 1
+
+# KeepAlived Variables
+
+keepalived_floating_ip: 10.4.62.99 
+keepalived_interface: ens192
+
+
+# ETCD Variables
+etcd_client_port: 2379
+etcd_peer_port: 2380
+
+# Patroni & PostgreSQL Parameters
+scope: 15/main
+patroni_rest_port: 8008
+patroni_peer_port: 8009
+patroni_ttl: 30
+patroni_loop_wait: 10
+patroni_retry_timeout: 10
+patroni_maximum_lag_on_failover: 1048576 #1MB
+postgresql_synchronous_commit: 'on'
+postgresql_synchronous_standby_names: ''
+postgresql_port: 5432
+postgresql_backup_folder: /var/lib/pgsql/17/backups # Change to backup volume once it is available
+postgresql_backup_retention: 7
+postgresql_wal_archive_folder: log_archive 
+postgresql_wal_archive_path: "/Redo_logs/{{ postgresql_wal_archive_folder }}"
+postgresql_wal_archive_retention: 7
+postgresql_wal_path: /Redo_logs/pg_wal
+postgresql_basebackup_max_rate: 800M
+postgresql_archive_command: 'pigz -c %p > {{ postgresql_wal_archive_path }}/%f.gz' # Change to backup volume once it is avaialable
+postgresql_max_connections: 100
+postgresql_max_wal_senders: 10
+postgresql_wal_log_hints: 'on'
+postgresql_ssl: 'off'
+postgresql_max_replication_slots: 10
+postgresql_checkpoint_timeout: "30min"
+postgresql_hot_standby_feedback: 'off'
+postgresql_work_mem: "34406kB"
+postgresql_shared_buffers: 52GB
+postgresql_effective_cache_size: 102GB
+postgresql_effective_io_concurrency: 256
+postgresql_io_method: "io_uring"
+postgresql_timescaledb_max_background_workers: 16
+postgresql_timescaledb_bgw_log_level: "DEBUG1"
+postgresql_maintenance_work_mem: 12GB
+postgresql_wal_buffers: 64MB
+postgresql_temp_buffers: 24MB
+postgresql_wal_keep_size: 100GB
+postgresql_min_wal_size: 4GB
+postgresql_max_wal_size: 512GB
+postgresql_max_worker_processes: 51
+postgresql_max_parallel_workers_per_gather: 16
+postgresql_max_parallel_workers: 32
+postgresql_max_parallel_maintenance_workers: 8
+postgresql_track_counts: 'on'
+postgresql_autovacuum: 'on'
+postgresql_log_line_prefix: '%m [%p] %q%u@%d '
+postgresql_log_filename: 'postgresql-%Y-%m-%d.log'
+postgresql_log_min_duration_statement: 500
+postgresql_log_autovacuum_min_duration: 0
+postgresql_log_lock_waits: 'on'
+postgresql_log_checkpoints: 'on'
+postgresql_log_temp_files: 1
+postgresql_log_retention: 7
+postgresql_shared_preload_libraries: 'pg_stat_statements,timescaledb,pgaudit'
+postgresql_pgaudit_log: 'role,ddl'
+postgresql_checkpoint_completion_target: 0.9
+postgresql_max_locks_per_transaction: 1024
+postgresql_autovacuum_max_workers: 8
+postgresql_autovacuum_naptime: 10
+postgresql_default_toast_compression: "lz4"
+postgresql_jit: "off"
+postgresql_version: 18
+postgresql_data_dir: /data/pgdata
+postgresql_repo_url: https://download.postgresql.org/pub/repos/yum/reporpms/EL-9-x86_64/pgdg-redhat-repo-latest.noarch.rpm
+postgresql_gpg_key_url: https://download.postgresql.org/pub/repos/yum/keys/PGDG-RPM-GPG-KEY-RHEL
+
+# pg_stat_monitor
+postgresql_pg_stat_monitor_pgsm_query_max_len: 4096
+postgresql_pg_stat_monitor_pgsm_normalized_query: 1
+postgresql_pg_stat_monitor_pgsm_enable_query_plan: "on"
+
+
+# PMM Variables
+
+percona_repo_url: https://repo.percona.com/apt/percona-release_latest.noble_all.deb
+percona_gpg_key_url: https://repo.percona.com/yum/PERCONA-PACKAGING-KEY
+pmm_server_address: 172.31.29.137
+
+# Operating System Variables
+os_sysctl_config:
+  - name: vm.overcommit_memory
+    value: "2"
+  - name: vm.swappiness
+    value: "1"
+  - name: vm.zone_reclaim_mode
+    value: "0"
+  - name: kernel.numa_balancing
+    value: "0"
+  - name: kernel.sched_autogroup_enabled
+    value: "0"
+  - name: vm.dirty_expire_centisecs
+    value: "3000"
+  - name: vm.dirty_background_bytes
+    value: "67108864"
+  - name: vm.dirty_bytes
+    value: "536870912"
+  - name: net.core.netdev_max_backlog
+    value: "10000"
+  - name: net.ipv4.tcp_max_syn_backlog
+    value: "8192"
+  - name: net.core.somaxconn
+    value: "10000"
+  - name: net.ipv4.tcp_tw_reuse
+    value: "1"
+
+# Disable transparent huge pages to avoid memory latency
+os_thp_config:
+  - file: enabled
+    value: "never"
+  - file: defrag
+    value: "never"
+
+allowed_ports:
+  - name: etcd_peer
+    value: "{{ etcd_peer_port }}"
+  - name: etcd_client
+    value: "{{ etcd_client_port }}"
+  - name: postgres
+    value: "{{ postgresql_port }}"
+  - name: patroni_peer
+    value: "{{ patroni_peer_port }}"
+  - name: patroni_rest
+    value: "{{ patroni_rest_port }}"
+
+
+proxysql_variables:
+  - name: admin-admin_credentials
+    value: "{{ proxysql_default_admin_user }}:{{ proxysql_default_admin_password }};{{ proxysql_admin_user }}:{{ proxysql_admin_password }}"
+  - name: mysql-monitor_username
+    value: "{{ proxysql_monitor_user }}"
+  - name: mysql-monitor_password
+    value: "{{ proxysql_monitor_password }}"
+  - name: mysql-monitor_ping_timeout
+    value: 1000
+  - name: mysql-free_connections_pct
+    value: 5

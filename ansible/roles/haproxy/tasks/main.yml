@@ -1,0 +1,72 @@
+---
+# tasks file for haproxy
+- name: Ensure haproxy config directory exists
+  file:
+    path: "{{ haproxy_config_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+    
+- name: Install haproxy config file
+  template:
+    src: haproxy.cfg.j2
+    dest: "{{ haproxy_config_path }}"
+    owner: root
+    group: root
+    mode: 0644
+
+
+- name: Ensure keepalived config directory exists
+  file:
+    path: "{{ keepalived_config_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install keepalived check script
+  template:
+    src: keepalived.sh.j2
+    dest: "{{ keepalived_script_path }}"
+    owner: root
+    group: root
+    mode: 0755
+
+- name: Install keepalived config file
+  template:
+    src: keepalived.conf.j2
+    dest: "{{ keepalived_config_path }}"
+    owner: root
+    group: root
+    mode: 0644
+
+- name: Gather package facts
+  package_facts:
+    manager: "auto"
+
+- name: Install HAProxy
+  apt:
+    name: haproxy
+    state: present
+  when: "'haproxy' not in ansible_facts.packages"  # Only install if not already installed
+
+- name: Start and enable HAProxy service
+  service:
+    name: haproxy
+    state: started
+    enabled: yes
+  when: not ansible_check_mode
+
+#- name: Install KeepAlived
+#  yum:
+#    name: keepalived
+#    state: present
+#  when: "'keepalived' not in ansible_facts.packages"  # Only install if not already installed
+#
+#- name: Start and enable KeepAlived service
+#  service:
+#    name: keepalived
+#    state: started
+#    enabled: yes
+#  when: not ansible_check_mode

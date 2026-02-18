@@ -1,0 +1,20 @@
+# WARNING: This file is automatically managed by Ansible. 
+# Any manual changes will be overwritten during the next deployment.
+
+listen orchestrator
+  bind  0.0.0.0:80
+  mode tcp
+  option httpchk GET /api/leader-check
+  maxconn 20000
+  balance first
+  retries 1
+  timeout connect 1000
+  timeout check 300
+  timeout server 30s
+  timeout client 30s
+
+  default-server port 3000 fall 1 inter 1000 rise 1 downinter 1000 on-marked-down shutdown-sessions weight 10
+
+{% for host in groups['orchestrator'] %}
+  server orchestrator-node-{{ loop.index }} {{ host }}:3000 check
+{% endfor %}

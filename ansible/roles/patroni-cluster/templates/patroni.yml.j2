@@ -1,0 +1,177 @@
+scope: {{ scope }}
+namespace: /db/
+name: {{ hostvars[inventory_hostname]['node_name'] }}
+
+restapi:
+  listen: {{ ansible_default_ipv4.address }}:{{ patroni_rest_port }}
+  connect_address: {{ ansible_default_ipv4.address }}:{{ patroni_rest_port }}
+
+etcd3:
+  hosts: {% for host in groups['postgresql'] %}{% set hostvar = hostvars[host] %}{% if hostvar.server_local_ip is defined %}{{ hostvar.server_local_ip }}:{{ etcd_client_port }}{% if not loop.last %},{% endif%}{% endif %}{%- endfor %}
+
+bootstrap:
+  dcs:
+    ttl: {{ patroni_ttl }}
+    loop_wait: {{ patroni_loop_wait }}
+    retry_timeout: {{ patroni_retry_timeout }}
+    maximum_lag_on_failover: {{ patroni_maximum_lag_on_failover }}
+    postgresql:
+      use_pg_rewind: true
+      parameters:
+          unix_socket_directories: "/var/run/postgresql/"
+          listen_addresses: '*'
+          external_pid_file: "/var/run/postgresql/{{ postgresql_version }}-main.pid"
+          port: {{ postgresql_port }}
+          wal_level: "replica"
+          ssl: "{{ postgresql_ssl }}"
+          hot_standby: "on"
+          synchronous_commit: "{{ postgresql_synchronous_commit }}"
+          max_connections: {{ postgresql_max_connections }}
+          max_wal_senders: {{ postgresql_max_wal_senders }}
+          max_replication_slots: {{ postgresql_max_replication_slots }}
+          checkpoint_timeout: "{{ postgresql_checkpoint_timeout }}"
+          wal_log_hints: "{{ postgresql_wal_log_hints }}"
+          hot_standby_feedback : '{{ postgresql_hot_standby_feedback }}'
+          work_mem: "{{ postgresql_work_mem }}"
+          wal_keep_size: "{{ postgresql_wal_keep_size }}"
+          min_wal_size: "{{ postgresql_min_wal_size }}"
+          max_wal_size: "{{ postgresql_max_wal_size }}"
+          max_worker_processes: {{ postgresql_max_worker_processes }}
+          max_parallel_workers_per_gather: {{ postgresql_max_parallel_workers_per_gather }}
+          max_parallel_workers: {{ postgresql_max_parallel_workers }}
+          max_parallel_maintenance_workers: {{ postgresql_max_parallel_maintenance_workers }}
+          shared_buffers : "{{ postgresql_shared_buffers }}"
+          effective_cache_size : "{{ postgresql_effective_cache_size }}"
+          maintenance_work_mem : "{{ postgresql_maintenance_work_mem }}"
+          wal_buffers : "{{ postgresql_wal_buffers }}"
+          temp_buffers: "{{ postgresql_temp_buffers }}"
+          effective_io_concurrency : {{ postgresql_effective_io_concurrency }}
+          io_method: "{{ postgresql_io_method }}"
+          timescaledb.max_background_workers: {{ postgresql_timescaledb_max_background_workers }}
+          timescaledb.bgw_log_level: "{{ postgresql_timescaledb_bgw_log_level }}"
+          track_counts : "{{ postgresql_track_counts }}"
+          autovacuum : "{{ postgresql_autovacuum }}"
+          log_filename : "{{ postgresql_log_filename }}"
+          log_min_duration_statement : {{ postgresql_log_min_duration_statement }}
+          log_autovacuum_min_duration : {{ postgresql_log_autovacuum_min_duration }}
+          log_lock_waits : "{{ postgresql_log_lock_waits }}"
+          log_checkpoints : "{{ postgresql_log_checkpoints }}"
+          log_temp_files : "{{ postgresql_log_temp_files }}"
+          shared_preload_libraries: "{{ postgresql_shared_preload_libraries }}"
+          default_statistics_target: 100
+          random_page_cost: 1.1
+          pgaudit.log: '{{ postgresql_pgaudit_log }}'
+          pgaudit.log_parameter: "on"
+          checkpoint_completion_target: {{ postgresql_checkpoint_completion_target }}
+          max_locks_per_transaction: {{ postgresql_max_locks_per_transaction }}
+          autovacuum_max_workers: {{ postgresql_autovacuum_max_workers }}
+          autovacuum_naptime: {{ postgresql_autovacuum_naptime }}
+          default_toast_compression: "{{ postgresql_default_toast_compression }}"
+          jit: "{{ postgresql_jit }}"
+          dynamic_shared_memory_type: "posix"
+          log_line_prefix: "{{ postgresql_log_line_prefix }}"
+
+  users:
+    admin:
+      password: admin
+      options:
+        - createrole
+        - createdb
+
+  initdb:
+    - encoding: UTF8
+    - data-checksums
+  pg_hba:
+    - local all all peer
+    - local all all trust
+    - host all all 127.0.0.1/32 trust
+    - host all all 0.0.0.0/0 md5
+    - host all all 0.0.0.0/0 scram-sha-256
+    - host replication {{ postgresql_replica_user }} 127.0.0.1/32 md5
+{% for host in groups['postgresql'] %}
+    - host replication {{ postgresql_replica_user }} {{ hostvars[host].server_local_ip }}/32 md5
+{% endfor %}
+
+postgresql:
+  listen: {{ ansible_default_ipv4.address }}:{{ postgresql_port }}
+  connect_address: {{ ansible_default_ipv4.address }}:{{ postgresql_port }}
+  data_dir: {{ postgresql_data_dir }}
+  bin_dir: /usr/lib/postgresql/{{ postgresql_version }}/bin
+  pgpass: /tmp/pgpass
+  basebackup:
+    max-rate: {{ postgresql_basebackup_max_rate }}
+  parameters:
+      unix_socket_directories: "/var/run/postgresql/"
+      listen_addresses: '*'
+      external_pid_file: "/var/run/postgresql/{{ postgresql_version }}-main.pid"
+      port: {{ postgresql_port }}
+      wal_level: "replica"
+      ssl: "{{ postgresql_ssl }}"
+      hot_standby: "on"
+      synchronous_commit: "{{ postgresql_synchronous_commit }}"
+      max_connections: {{ postgresql_max_connections }}
+      max_wal_senders: {{ postgresql_max_wal_senders }}
+      max_replication_slots: {{ postgresql_max_replication_slots }}
+      checkpoint_timeout: "{{ postgresql_checkpoint_timeout }}"
+      wal_log_hints: "{{ postgresql_wal_log_hints }}"
+      hot_standby_feedback : '{{ postgresql_hot_standby_feedback }}'
+      work_mem: "{{ postgresql_work_mem }}"
+      wal_keep_size: "{{ postgresql_wal_keep_size }}"
+      min_wal_size: "{{ postgresql_min_wal_size }}"
+      max_wal_size: "{{ postgresql_max_wal_size }}"
+      max_worker_processes: {{ postgresql_max_worker_processes }}
+      max_parallel_workers_per_gather: {{ postgresql_max_parallel_workers_per_gather }}
+      max_parallel_workers: {{ postgresql_max_parallel_workers }}
+      max_parallel_maintenance_workers: {{ postgresql_max_parallel_maintenance_workers }}
+      shared_buffers : "{{ postgresql_shared_buffers }}"
+      effective_cache_size : "{{ postgresql_effective_cache_size }}"
+      maintenance_work_mem : "{{ postgresql_maintenance_work_mem }}"
+      wal_buffers : "{{ postgresql_wal_buffers }}"
+      temp_buffers: "{{ postgresql_temp_buffers }}"
+      effective_io_concurrency : {{ postgresql_effective_io_concurrency }}
+      io_method: "{{ postgresql_io_method }}"
+      timescaledb.max_background_workers: {{ postgresql_timescaledb_max_background_workers }}
+      timescaledb.bgw_log_level: "{{ postgresql_timescaledb_bgw_log_level }}"
+      track_counts : "{{ postgresql_track_counts }}"
+      autovacuum : "{{ postgresql_autovacuum }}"
+      log_filename : "{{ postgresql_log_filename }}"
+      log_min_duration_statement : {{ postgresql_log_min_duration_statement }}
+      log_autovacuum_min_duration : {{ postgresql_log_autovacuum_min_duration }}
+      log_lock_waits : "{{ postgresql_log_lock_waits }}"
+      log_checkpoints : "{{ postgresql_log_checkpoints }}"
+      log_temp_files : "{{ postgresql_log_temp_files }}"
+      shared_preload_libraries: "{{ postgresql_shared_preload_libraries }}"
+      default_statistics_target: 100
+      random_page_cost: 1.1
+      pgaudit.log: '{{ postgresql_pgaudit_log }}'
+      pgaudit.log_parameter: "on"
+      checkpoint_completion_target: {{ postgresql_checkpoint_completion_target }}
+      max_locks_per_transaction: {{ postgresql_max_locks_per_transaction }}
+      autovacuum_max_workers: {{ postgresql_autovacuum_max_workers }}
+      autovacuum_naptime: {{ postgresql_autovacuum_naptime }}
+      default_toast_compression: "{{ postgresql_default_toast_compression }}"
+      jit: "{{ postgresql_jit }}"
+      dynamic_shared_memory_type: "posix"
+      log_line_prefix: "{{ postgresql_log_line_prefix }}"
+  authentication:
+    replication:
+      username: {{ postgresql_replica_user }}
+      password: {{ postgresql_replica_password }}
+    superuser:
+      username: {{ postgresql_super_user }}
+      password: {{ postgresql_super_password }}
+  pg_hba:
+    - local all all peer
+    - local all all trust
+    - host all all 127.0.0.1/32 trust
+    - host all all 0.0.0.0/0 md5
+    - host all all 0.0.0.0/0 scram-sha-256
+    - host replication {{ postgresql_replica_user }} 127.0.0.1/32 md5
+{% for host in groups['postgresql'] %}
+    - host replication {{ postgresql_replica_user }} {{ hostvars[host].server_local_ip }}/32 md5
+{% endfor %}
+tags:
+  nofailover: {{ hostvars[inventory_hostname]['nofailover'] }}
+  noloadbalance: {{ hostvars[inventory_hostname]['noloadbalance'] }}
+  clonefrom: {{ hostvars[inventory_hostname]['clonefrom'] }}
+  nosync: {{ hostvars[inventory_hostname]['nosync'] }}

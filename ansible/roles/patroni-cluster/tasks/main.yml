@@ -1,0 +1,208 @@
+---
+# tasks file for patroni-cluster
+  
+- name: Gather package facts
+  package_facts:
+    manager: "auto"
+
+#- name: Install dependent packages
+#  dnf:
+#    name:
+#      - python3-pip # required for patroni
+#      - python3-devel # required for patroni
+#      - epel-release # required for etcd
+#    state: present
+
+# - name: Download and Install PostgreSQL if not installed
+#   block:
+# - name: Install the PostgreSQL {{ postgresql_version }} repository RPM
+#   dnf:
+#     name: "{{ postgresql_repo_url }}"
+#     state: present
+
+  # Enable pgdg extras.
+#  - name: Enable pgdg-rhel9-extras repository
+#    command: dnf config-manager --set-enabled pgdg-rhel9-extras
+
+  # Disable the built-in PostgreSQL module.
+#  - name: Disable the default PostgreSQL module
+#    command: dnf module disable postgresql -y
+
+  # - name: Install PostgreSQL
+  #   apt:
+  #     name:
+  #       - postgresql-{{postgresql_version}}
+  #       - timescaledb-2-postgresql-{{postgresql_version}}
+  #     state: present
+  # when: "'postgresql{{ postgresql_version }}' not in ansible_facts.packages" 
+
+#- name: Install pg-repack package
+#  dnf:
+#    name: pg_repack_{{postgresql_version}}
+#    state: present
+
+# - name: Ensure wal external directory exists
+#   file:
+#     path: "{{ postgresql_wal_path }}"
+#     state: directory
+#     owner: postgres
+#     group: postgres
+#     mode: '0750'
+
+#- name: Ensure wal archive directory exists
+#  file:
+#    path: "{{ postgresql_wal_archive_path }}"
+#    state: directory
+#    owner: postgres
+#    group: postgres
+#    mode: '0750'
+
+# - name: Install Patroni
+#   apt:
+#     name: patroni
+#     state: present
+#   when: "'patroni' not in ansible_facts.packages"  
+
+# - name: Ensure Patroni config directory exists
+#   file:
+#     path: "{{ patroni_config_path | dirname }}"
+#     state: directory
+#     owner: root
+#     group: root
+#     mode: '0755'
+
+
+- name: Install Patroni config file
+  template:
+    src: patroni.yml.j2
+    dest: "{{ patroni_config_path }}"
+    owner: root
+    group: root
+    mode: 0644
+
+#- name: Install WAL archives Cleanup Utility
+#  template:
+#    src: clear_wal_archives.sh.j2
+#    dest: "{{ postgresql_wal_archives_utility_path }}"
+#    owner: postgres
+#    group: postgres
+#    mode: 0755
+
+#- name: Create a cron job for clearing WAL archives
+#  cron:
+#    name: "Clear WAL Archives"
+#    minute: "0"
+#    hour: "0"
+#    user: "postgres"
+#    job: "{{ postgresql_wal_archives_utility_path }} >> /tmp/clear_wal_archives.log 2>&1"
+
+
+#- name: Install Backup Utility
+#  template:
+#    src: full_backup.sh.j2
+#    dest: "{{ postgresql_backup_utility_path }}"
+#    owner: postgres
+#    group: postgres
+#    mode: 0755
+
+#- name: Add cron job for backup script (if enabled)
+#  cron:
+#    name: "Run backup script"
+#    minute: "0"
+#    hour: "2"
+#    user: "postgres"
+#    job: "{{ postgresql_backup_utility_path }}"
+#    state: present
+#  when: backup_cron_enabled | bool
+#
+#- name: Remove backup cron job (if disabled)
+#  cron:
+#    name: "Run backup script"
+#    user: "postgres"
+#    state: absent
+#  when: not backup_cron_enabled | bool
+
+- name: Enable and Start Patroni service
+  service:
+    name: patroni
+    state: started
+    enabled: yes
+  when: not ansible_check_mode
+
+#- name: Install utility packages
+#  dnf:
+#    name:
+#      - screen  # to have multiple linux sessions
+#      - sysbench # database benchmarking
+#      - sysstat # io stats
+#      - fio # disk benchmarking
+#    state: present
+
+
+# Install pmm-agent for monitoring
+# - name: Add Percona GPG key
+#   apt_key:
+#     url: "{{ percona_gpg_key_url }}"
+#     state: present
+
+# - name: Download the Percona repository package
+#   get_url:
+#     url: "{{ percona_repo_url }}"
+#     dest: /tmp/percona-release_latest.deb
+
+# - name: Install the Percona repository package
+#   apt:
+#     deb: /tmp/percona-release_latest.deb
+
+# - name: Update the apt cache
+#   apt:
+#     update_cache: yes
+
+# - name: Install PMM Agent
+#   apt:
+#     name: pmm2-client
+#     state: present
+#   when: "'pmm2-client' not in ansible_facts.packages"  # Only install if not already installed
+
+# - name: Check if client is already connected to a PMM server
+#   ansible.builtin.command: pmm-admin status --json
+#   changed_when: false
+#   failed_when: false
+#   no_log: true
+#   register: _pmm_status
+
+# - name: Load PMM status into an Ansible variable
+#   ansible.builtin.set_fact:
+#     _pmm_status: "{{ (_pmm_status.stdout | from_json) if _pmm_status.stdout | length > 0 else {} }}"
+
+# - name: Register instance to PMM server
+#   command: >
+#     pmm-admin config --server-insecure-tls --server-url=https://{{ pmm_server_user }}:{{ pmm_server_password }}@{{ pmm_server_address }}:443 
+#   changed_when: false
+#   when:
+#     - _pmm_status.pmm_agent_status.connected is not defined or not _pmm_status.pmm_agent_status.connected
+
+# - name: Check if a service is already configured
+#   ansible.builtin.shell: pmm-admin list --json 2>&1
+#   changed_when: false
+#   ignore_errors: true
+#   register: _pmm_list
+#   when: not ansible_check_mode  # Only run the command if not in check mode
+
+# - name: Load PMM list into an Ansible variable
+#   ansible.builtin.set_fact:
+#     _pmm_list: "{{ (_pmm_list.stdout | from_json) if (_pmm_list.stdout is defined and _pmm_list.stdout | length > 0) else {} }}"
+#   when: _pmm_list is defined  # Ensure the variable is defined before using it
+
+# - name: Add PostgreSQL service to PMM
+#   command: >
+#     pmm-admin add postgresql --username={{ postgresql_super_user }} --password={{ postgresql_super_password }} --query-source=pgstatmonitor --host=127.0.0.1
+#   changed_when: false
+#   when: _pmm_list.service is not defined or (server_hostname + '-postgresql' not in _pmm_list.service | map(attribute="service_name") | list)
+
+# - name: Add external PMM service
+#   command: >
+#     pmm-admin add external --listen-port=8008 --service-name={{ server_hostname }}-patroni
+#   changed_when: false
+#   ignore_errors: true
+#   when: not ansible_check_mode  # Only run the command if not in check mode

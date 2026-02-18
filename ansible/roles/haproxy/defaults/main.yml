@@ -1,0 +1,5 @@
+---
+# defaults file for haproxy
+haproxy_config_path: /etc/haproxy/haproxy.cfg
+keepalived_config_path: /etc/keepalived/keepalived.conf
+keepalived_script_path: /etc/keepalived/keepalived.sh

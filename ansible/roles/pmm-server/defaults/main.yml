@@ -1,0 +1,5 @@
+---
+# defaults file for haproxy
+pmm_server_image: percona/pmm-server
+pmm_server_image_tag: 2.43.2
+enable_backup_management: 0

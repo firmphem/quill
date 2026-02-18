@@ -1,0 +1,14 @@
+[all:children]
+postgresql
+#pmm_server
+
+[postgresql]
+10.117.209.17 server_ip=10.117.209.17 server_local_ip=10.117.209.17 server_hostname=rwe-postgresql1 backup_cron_enabled=false node_name=psql1 etcd_name=etcd1 keepalied_state=MASTER keepalied_weight=100 nofailover=false noloadbalance=false clonefrom=false nosync=false
+10.117.209.18 server_ip=10.117.209.18 server_local_ip=10.117.209.18 server_hostname=rwe-postgresql2 backup_cron_enabled=false node_name=psql2 etcd_name=etcd2 keepalied_state=BACKUP keepalied_weight=96 nofailover=false noloadbalance=false clonefrom=false nosync=false
+#10.117.209.21 server_ip=10.117.209.21 server_local_ip=10.117.209.21 server_hostname=rwe-postgresql3 backup_cron_enabled=true node_name=psql3 etcd_name=etcd3 keepalied_state=BACKUP keepalied_weight=92 nofailover=false noloadbalance=false clonefrom=false nosync=false
+
+[pmm_server]
+10.117.209.19 server_ip=10.117.209.19 server_local_ip=10.117.209.19 server_hostname=PMM-1
+
+[postgresql:vars]
+ansible_ssh_common_args='-o ProxyCommand="ssh -p 22 -W %h:%p -q harun@192.168.100.55"'

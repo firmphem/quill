@@ -1,0 +1,13 @@
+{{ postgresql_data_dir }}/log/postgresql-*.log {
+    daily
+    missingok
+    rotate {{ postgresql_log_retention }}
+    compress
+    delaycompress
+    notifempty
+    create 0640 postgres postgres
+    sharedscripts
+    postrotate
+        /bin/kill -HUP $(head -1 {{ postgresql_data_dir }}/postmaster.pid) > /dev/null 2>&1 || true
+    endscript
+}
