@@ -113,7 +113,7 @@ func insertBatchCopy(ctx context.Context, db *pgxpool.Pool, batch []MetricRow, w
 		pgx.CopyFromRows(rows),
 	)
 	if err != nil {
-		log.Error().Int("worker", workerID).Msg("COPY failed")
+		log.Error().Int("worker", workerID).Err(err).Msg("COPY failed")
 		return fmt.Errorf("copy into metric failed: %w", err)
 	}
 
