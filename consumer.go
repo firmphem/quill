@@ -89,6 +89,13 @@ func (pw *PartitionWorker) processMessageNew(m *kafka.Message, db *pgxpool.Pool)
 	// - all fails will be reported as errors;
 	// - after the exit from this functtion message will be committed in anyway
 	// - we print here only errors which "accumulated", i.e. we continue after them
+	if len(m.Value) == 0 {
+		log.Trace().
+			Int32("partition", m.TopicPartition.Partition).
+			Int64("offset", int64(m.TopicPartition.Offset)).
+			Msg("got empty payload. will commit it")
+		return nil
+	}
 
 	var customError error
 	messagesReceivedTotal.Inc()

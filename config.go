@@ -113,6 +113,8 @@ func validateConfig(cfg *Config) error {
 // -----------------------------------------------------------------------------
 func applyLogLevel(cfg *Config) {
 	switch strings.ToLower(cfg.Logging.Level) {
+	case "trace":
+		zerolog.SetGlobalLevel(zerolog.TraceLevel)
 	case "debug":
 		zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	case "info":
