@@ -272,7 +272,9 @@ func retryUntilDone(ctx context.Context,
 	tryFunc TryFunc,
 	isRetriable IsRetriableFunc,
 	onNonRetriableLabel string,
-	onNonRetriable func(error) error) error {
+	onNonRetriable func(error) error,
+) error {
+
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error().Err(fmt.Errorf("pgx panic recovered: %v", r)).Msg("recovered from pgx panic")
@@ -280,19 +282,24 @@ func retryUntilDone(ctx context.Context,
 	}()
 
 	backoff := time.Second
+	retryCount := 0
 
 	for {
 		err := tryFunc(ctx)
 
 		if err == nil {
+			if retryCount > 0 {
+				log.Info().Str("op", tryFuncLabel).Int("retries", retryCount).Msg("operation succeeded after previous failures")
+			}
 			return nil
 		}
+		retryCount++
 
 		if !isRetriable(err) {
 			log.Info().Err(err).Str("op", tryFuncLabel).Str("next op", onNonRetriableLabel).Msg("error is not retriable so we will try the next method if available.")
 			return onNonRetriable(err)
 		} else {
-			log.Info().Err(err).Str("op", tryFuncLabel).Str("next op", onNonRetriableLabel).Msg("error is retriable so we will try it again after the sleep")
+			log.Info().Err(err).Str("op", tryFuncLabel).Str("next op", onNonRetriableLabel).Int("retries", retryCount).Msg("error is retriable so we will try it again after the sleep")
 		}
 
 		select {
