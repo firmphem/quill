@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -35,23 +37,35 @@ func initDatabase(cfg *Config) *pgxpool.Pool {
 }
 
 // -----------------------------------------------------------------------------
-func isRetriablePostgreSQLErr(err error) bool {
+func getPostgresErrorCode(err error) (string, bool) {
+	var pgErr *pgconn.PgError
+
+	if err != nil && errors.As(err, &pgErr) {
+		return pgErr.Code, true
+	}
+
+	return "", false
+}
+
+// -----------------------------------------------------------------------------
+func isRetriableErr(err error) bool {
 	if err == nil {
 		return false
 	}
 
+	// postgres error
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
-		// TODO: review them carefully again
-		// https://www.postgresql.org/docs/current/errcodes-appendix.html
 		switch pgErr.Code {
-		case "40001": // serialization failure
-		case "40P01": // deadlock
-		case "53300": // too_many_connections
-		case "53400": // configuration limit exceeded
-		case "55P03": // lock not available
-		case "57014": // statement timeout (all class 57 ?)
-		case "08000", "08003", "08006", "08001", "08004", "08007": // connection errors (all class 08 ?)
+		case "40001", // serialization failure
+			"40P01",                                              // deadlock
+			"53300",                                              // too_many_connections
+			"53400",                                              // configuration limit exceeded
+			"55P03",                                              // lock not available
+			"57014",                                              // statement timeout (all class 57 ?)
+			"57P03",                                              // cannot  connect now
+			"57P01",                                              // terminating connection due to administrator command
+			"08000", "08003", "08006", "08001", "08004", "08007": // connection errors (all class 08 ?)
 			return true
 
 		default:
@@ -59,8 +73,16 @@ func isRetriablePostgreSQLErr(err error) bool {
 		}
 	}
 
-	// network from the network layer errors
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+	// network errors
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+
+	// syscalls: connection reset/refused or broken pipe
+	if errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.EPIPE) {
 		return true
 	}
 
@@ -113,7 +135,8 @@ func insertBatchCopy(ctx context.Context, db *pgxpool.Pool, batch []MetricRow, w
 		pgx.CopyFromRows(rows),
 	)
 	if err != nil {
-		log.Error().Int("worker", workerID).Err(err).Msg("COPY failed")
+		code, isPG := getPostgresErrorCode(err)
+		log.Error().Int("worker", workerID).Err(err).Str("code", code).Bool("isPG", isPG).Msg("COPY failed")
 		return fmt.Errorf("copy into metric failed: %w", err)
 	}
 
@@ -144,8 +167,10 @@ func (pw *PartitionWorker) insertMetricsToPostgresWithRetries(db *pgxpool.Pool, 
 	fallbackToBatch := func(copyErr error) error {
 		return retryUntilDone(
 			pw.ctx,
+			"batch_insert_to_postgres",
 			batchTry,
-			isRetriablePostgreSQLErr,
+			isRetriableErr,
+			"failure",
 			func(batchErr error) error {
 				return batchErr
 			},
@@ -154,8 +179,10 @@ func (pw *PartitionWorker) insertMetricsToPostgresWithRetries(db *pgxpool.Pool, 
 
 	return retryUntilDone(
 		pw.ctx,
+		"copy_to_postgres",
 		copyTry,
-		isRetriablePostgreSQLErr,
+		isRetriableErr,
+		"batch_insert_to_postgres",
 		fallbackToBatch,
 	)
 }
@@ -240,18 +267,39 @@ func insertBatchTransactional(ctx context.Context, db *pgxpool.Pool, batch []Met
 
 // -----------------------------------------------------------------------------
 // retry and error is not retriable fallback to another method if any OR fail
-func retryUntilDone(ctx context.Context, tryFunc TryFunc, isRetriable IsRetriableFunc, onNonRetriable func(error) error) error {
+func retryUntilDone(ctx context.Context,
+	tryFuncLabel string,
+	tryFunc TryFunc,
+	isRetriable IsRetriableFunc,
+	onNonRetriableLabel string,
+	onNonRetriable func(error) error,
+) error {
+
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().Err(fmt.Errorf("pgx panic recovered: %v", r)).Msg("recovered from pgx panic")
+		}
+	}()
+
 	backoff := time.Second
+	retryCount := 0
 
 	for {
 		err := tryFunc(ctx)
 
 		if err == nil {
+			if retryCount > 0 {
+				log.Info().Str("op", tryFuncLabel).Int("retries", retryCount).Msg("operation succeeded after previous failures")
+			}
 			return nil
 		}
+		retryCount++
 
 		if !isRetriable(err) {
+			log.Info().Err(err).Str("op", tryFuncLabel).Str("next op", onNonRetriableLabel).Msg("error is not retriable so we will try the next method if available.")
 			return onNonRetriable(err)
+		} else {
+			log.Info().Err(err).Str("op", tryFuncLabel).Str("next op", onNonRetriableLabel).Int("retries", retryCount).Msg("error is retriable so we will try it again after the sleep")
 		}
 
 		select {
@@ -259,7 +307,7 @@ func retryUntilDone(ctx context.Context, tryFunc TryFunc, isRetriable IsRetriabl
 			return ctx.Err()
 		default:
 			time.Sleep(backoff)
-			if backoff <= 32*time.Second {
+			if backoff <= 16*time.Second {
 				backoff *= 2
 			}
 		}

@@ -45,6 +45,8 @@ func (pw *PartitionWorker) start(db *pgxpool.Pool, ackCh chan<- Ack) {
 		defer pw.wg.Done()
 		log.Info().Int32("partition", pw.partition).Msg("worker started")
 
+		firstMessageReceived := false
+
 		for {
 			select {
 			case <-pw.ctx.Done():
@@ -54,6 +56,15 @@ func (pw *PartitionWorker) start(db *pgxpool.Pool, ackCh chan<- Ack) {
 				if !ok {
 					log.Info().Int32("partition", pw.partition).Msg("msgCh closed, exiting")
 					return
+				}
+
+				// print the offset of the first message
+				if !firstMessageReceived {
+					log.Info().
+						Int32("partition", m.TopicPartition.Partition).
+						Int64("offset", int64(m.TopicPartition.Offset)).
+						Msg("first kafka message received")
+					firstMessageReceived = true
 				}
 
 				err := pw.processMessageNew(m, db)
@@ -252,7 +263,6 @@ func (pw *PartitionWorker) processMessageNew(m *kafka.Message, db *pgxpool.Pool)
 	s.end()
 
 	insertErr := pw.insertMetricsToPostgresWithRetries(db, rows, int(pw.partition))
-	// log.Info().Int("payload size", len(km.Payload.Metrics)).Msg("metrics size")
 
 	if insertErr != nil {
 		customError = fmt.Errorf("insert into the postgres failed: %w", insertErr)

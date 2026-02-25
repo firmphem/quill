@@ -111,7 +111,24 @@ func lookupOrCreateRefID(
 		fkValue, _ = extra[1].(int)
 	}
 
-	id, err := lookupOrCreateRef(ctx, db, tableName, columnName, value, fkColumn, fkValue)
+	var id int
+
+	// run 'lookupOrCreateRef' with retry
+	err := retryUntilDone(
+		ctx,
+		"lookupOrCreateRef",
+		func(innerCtx context.Context) (innerErr error) {
+			var lookupErr error
+			id, lookupErr = lookupOrCreateRef(innerCtx, db, tableName, columnName, value, fkColumn, fkValue)
+			return lookupErr
+		},
+		isRetriableErr,
+		"failure",
+		func(finalErr error) error {
+			return finalErr
+		},
+	)
+
 	if err != nil {
 		return 0, err
 	}
@@ -145,7 +162,7 @@ func lookupOrCreateMetricName(
 	}
 	mu.RUnlock()
 
-	// Insert or update metric_name with data_type
+	// insert or update metric_name with data_type
 	sql := `
         INSERT INTO metric_name (name, data_type, device_id_no)
         VALUES ($1, $2, $3)
@@ -154,11 +171,26 @@ func lookupOrCreateMetricName(
     `
 
 	var id int
-	if err := db.QueryRow(ctx, sql, name, dataType, deviceIDNo).Scan(&id); err != nil {
-		return 0, fmt.Errorf("insert metric_name failed: %w", err)
+
+	// wrap it in the retry
+	err := retryUntilDone(
+		ctx,
+		"lookupOrCreateMetricName",
+		func(innerCtx context.Context) (innerErr error) {
+			return db.QueryRow(innerCtx, sql, name, dataType, deviceIDNo).Scan(&id)
+		},
+		isRetriableErr,
+		"failure",
+		func(finalErr error) error {
+			return fmt.Errorf("insert metric_name failed after retries: %w", finalErr)
+		},
+	)
+
+	if err != nil {
+		return 0, err
 	}
 
-	// Update cache
+	// update cache
 	mu.Lock()
 	cache[name] = id
 	mu.Unlock()
