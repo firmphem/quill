@@ -56,7 +56,6 @@ func isRetriableErr(err error) bool {
 	// postgres error
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
-		fmt.Println(pgErr.Code)
 		switch pgErr.Code {
 		case "40001", // serialization failure
 			"40P01",                                              // deadlock
@@ -168,8 +167,10 @@ func (pw *PartitionWorker) insertMetricsToPostgresWithRetries(db *pgxpool.Pool, 
 	fallbackToBatch := func(copyErr error) error {
 		return retryUntilDone(
 			pw.ctx,
+			"batch_insert_to_postgres",
 			batchTry,
 			isRetriableErr,
+			"failure",
 			func(batchErr error) error {
 				return batchErr
 			},
@@ -178,8 +179,10 @@ func (pw *PartitionWorker) insertMetricsToPostgresWithRetries(db *pgxpool.Pool, 
 
 	return retryUntilDone(
 		pw.ctx,
+		"copy_to_postgres",
 		copyTry,
 		isRetriableErr,
+		"batch_insert_to_postgres",
 		fallbackToBatch,
 	)
 }
@@ -264,7 +267,18 @@ func insertBatchTransactional(ctx context.Context, db *pgxpool.Pool, batch []Met
 
 // -----------------------------------------------------------------------------
 // retry and error is not retriable fallback to another method if any OR fail
-func retryUntilDone(ctx context.Context, tryFunc TryFunc, isRetriable IsRetriableFunc, onNonRetriable func(error) error) error {
+func retryUntilDone(ctx context.Context,
+	tryFuncLabel string,
+	tryFunc TryFunc,
+	isRetriable IsRetriableFunc,
+	onNonRetriableLabel string,
+	onNonRetriable func(error) error) error {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().Err(fmt.Errorf("pgx panic recovered: %v", r)).Msg("recovered from pgx panic")
+		}
+	}()
+
 	backoff := time.Second
 
 	for {
@@ -275,8 +289,10 @@ func retryUntilDone(ctx context.Context, tryFunc TryFunc, isRetriable IsRetriabl
 		}
 
 		if !isRetriable(err) {
-			log.Info().Err(err).Msg("error is not retriable so we will try the next method if available.")
+			log.Info().Err(err).Str("op", tryFuncLabel).Str("next op", onNonRetriableLabel).Msg("error is not retriable so we will try the next method if available.")
 			return onNonRetriable(err)
+		} else {
+			log.Info().Err(err).Str("op", tryFuncLabel).Str("next op", onNonRetriableLabel).Msg("error is retriable so we will try it again after the sleep")
 		}
 
 		select {

@@ -263,7 +263,6 @@ func (pw *PartitionWorker) processMessageNew(m *kafka.Message, db *pgxpool.Pool)
 	s.end()
 
 	insertErr := pw.insertMetricsToPostgresWithRetries(db, rows, int(pw.partition))
-	// log.Info().Int("payload size", len(km.Payload.Metrics)).Msg("metrics size")
 
 	if insertErr != nil {
 		customError = fmt.Errorf("insert into the postgres failed: %w", insertErr)
