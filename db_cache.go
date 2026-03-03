@@ -198,8 +198,7 @@ func lookupOrCreateMetricName(
 	return id, nil
 }
 
-// preloadReferenceCaches loads existing reference data from DB into memory.
-// This reduces insert overhead during ingestion.
+// -----------------------------------------------------------------------------
 func preloadReferenceCaches(ctx context.Context, db *pgxpool.Pool) error {
 	log.Info().Msg("Preloading reference caches from database...")
 

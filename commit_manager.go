@@ -43,7 +43,7 @@ func commitManager(ctx context.Context, partitionsMu *sync.Mutex, partitions map
 			partitionsMu.Unlock()
 
 			if len(offsets) > 0 {
-				log.Debug().Interface("offsets", offsets).Msg("final commit on shutdown")
+				log.Debug().Interface("offsets", offsets).Msg("final commit on shutdown. we won't retry it.")
 				if _, err := consumer.CommitOffsets(offsets); err != nil {
 					log.Error().Err(err).Msg("final commit failed")
 				} else {
@@ -74,7 +74,7 @@ func commitManager(ctx context.Context, partitionsMu *sync.Mutex, partitions map
 			}
 			ps.msgCount++
 
-			// immediate commit requested by worker
+			// immediate commit requested by worker (only for test reason here)
 			if ack.CommitNow {
 				offsets := []kafka.TopicPartition{{
 					Topic:     &topic,
@@ -83,7 +83,6 @@ func commitManager(ctx context.Context, partitionsMu *sync.Mutex, partitions map
 				}}
 				if _, err := consumer.CommitOffsets(offsets); err != nil {
 					log.Error().Int32("partition", ack.Partition).Err(err).Msg("immediate commit failed")
-
 				} else {
 					ps.lastCommitted = ps.lastProcessed
 					ps.msgCount = 0
@@ -101,8 +100,26 @@ func commitManager(ctx context.Context, partitionsMu *sync.Mutex, partitions map
 						Partition: ack.Partition,
 						Offset:    ps.lastProcessed + 1,
 					}}
-					if _, err := consumer.CommitOffsets(offsets); err != nil {
-						log.Error().Int32("partition", ack.Partition).Err(err).Msg("batch commit failed")
+
+					err := retryUntilDone(
+						ctx,
+						"commitByBatch",
+						func(ctx context.Context) error {
+							_, err := consumer.CommitOffsets(offsets)
+							return err
+						},
+						isRetriableErr,
+						"failure",
+						func(finalErr error) error {
+							return finalErr
+						},
+					)
+
+					// if _, err := consumer.CommitOffsets(offsets); err != nil {
+					if err != nil {
+						if !isRetriableErr(err) {
+							log.Error().Int32("partition", ack.Partition).Err(err).Msg("batch commit failed with not retriable error")
+						}
 					} else {
 						commitsDoneAtomic.Add(int32(ps.msgCount))
 
@@ -140,8 +157,24 @@ func commitManager(ctx context.Context, partitionsMu *sync.Mutex, partitions map
 			partitionsMu.Unlock()
 
 			if len(offsets) > 0 {
-				if _, err := consumer.CommitOffsets(offsets); err != nil {
-					log.Error().Err(err).Msg("time-based commit failed")
+				err := retryUntilDone(
+					ctx,
+					"commitByBatch",
+					func(ctx context.Context) error {
+						_, err := consumer.CommitOffsets(offsets)
+						return err
+					},
+					isRetriableErr,
+					"failure",
+					func(finalErr error) error {
+						return finalErr
+					},
+				)
+				if err != nil {
+					// if _, err := consumer.CommitOffsets(offsets); err != nil {
+					if !isRetriableErr(err) {
+						log.Error().Err(err).Msg("time-based commit failed with not retriable error")
+					}
 				} else {
 					partitionsMu.Lock()
 					for _, tp := range offsets {
