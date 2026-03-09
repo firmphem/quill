@@ -16,6 +16,18 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	ErrorMatchEquals   = "equals"
+	ErrorMatchContains = "contains"
+
+	kafkaTopicPattern = "%KAFKA_TOPIC%"
+)
+
+type ErrorMatcher struct {
+	Value   string `yaml:"value"`
+	Matched string `yaml:"matched"`
+}
+
 type Config struct {
 	Kafka struct {
 		Brokers []string `yaml:"brokers"`
@@ -52,11 +64,10 @@ type Config struct {
 		LeaseTTLSeconds int      `yaml:"leaseTTLSeconds"`
 		EtcdLeaderKey   string   `yaml:"etcdLeaderKey"`
 	} `yaml:"etcd"`
+	NonRetriableErrors []ErrorMatcher `yaml:"non_retriable_errors"`
 }
 
 var configFile string
-
-const kafkaTopicPattern = "%KAFKA_TOPIC%"
 
 // -----------------------------------------------------------------------------
 func loadConfig(path string) (*Config, error) {
@@ -106,6 +117,20 @@ func validateConfig(cfg *Config) error {
 	}
 	if cfg.Quill.BatchSize <= 0 || cfg.Quill.BatchTimeout <= 0 {
 		return fmt.Errorf("quill config invalid")
+	}
+
+	for _, errConfig := range cfg.NonRetriableErrors {
+		if errConfig.Value == "" {
+			return fmt.Errorf("non retriable error value cannot be empty")
+		}
+
+		switch errConfig.Matched {
+		case ErrorMatchEquals, ErrorMatchContains:
+			continue
+		default:
+			return fmt.Errorf("invalid match type '%s' for error '%s': must be '%s' or '%s'",
+				errConfig.Matched, errConfig.Value, ErrorMatchEquals, ErrorMatchContains)
+		}
 	}
 	return nil
 }

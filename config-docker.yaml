@@ -24,7 +24,7 @@ http:
   metrics_port: 8081
 
 logging:
-   level: INFO
+   level: TRACE
 
 tracker:
    enabled: false
@@ -34,3 +34,7 @@ etcd:
     - rwe-etcd:2379
   leaseTTLSeconds: 10
   etcdLeaderKey: 'quill/%KAFKA_TOPIC%/leader'
+
+non_retriable_errors:
+   - value: json_unmarshal_failed
+     matched: equals

@@ -18,7 +18,7 @@ quill:
   channel_size: 4000
   kafka_offset_commit:
      every_messages: 100
-     every_milliseconds: 10000
+     every_milliseconds: 1000
 
 http:
   metrics_port: 8084
@@ -33,3 +33,7 @@ etcd:
     - 10.117.209.21:2379
   leaseTTLSeconds: 120
   etcdLeaderKey: 'quill/%KAFKA_TOPIC%/leader'
+
+non_retriable_errors:
+   - value: json_unmarshal_failed
+     matched: contains
