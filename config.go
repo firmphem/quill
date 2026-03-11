@@ -109,29 +109,57 @@ func loadConfig(path string) (*Config, error) {
 
 // -----------------------------------------------------------------------------
 func validateConfig(cfg *Config) error {
+	// return fmt.Errorf("invalid config: kafka config invalid")
+	hasError := false
+
 	if len(cfg.Kafka.Brokers) == 0 || cfg.Kafka.Topic == "" || cfg.Kafka.GroupID == "" {
-		return fmt.Errorf("kafka config invalid")
+		hasError = true
+		log.Error().Msg("invalid config: kafka config invalid")
 	}
 	if cfg.Database.Host == "" || cfg.Database.User == "" || cfg.Database.Name == "" {
-		return fmt.Errorf("database config invalid")
+		hasError = true
+		log.Error().Msg("invalid config: database config invalid")
 	}
-	if cfg.Quill.BatchSize <= 0 || cfg.Quill.BatchTimeout <= 0 {
-		return fmt.Errorf("quill config invalid")
+	if cfg.Quill.BatchSize <= 0 {
+		hasError = true
+		log.Error().Msg("invalid config: batch_size must be greater than 0")
+	}
+	if cfg.Quill.BatchTimeout <= 0 {
+		hasError = true
+		log.Error().Msg("invalid config: batch_timeout_seconds must be greater than 0")
+	}
+	if cfg.Quill.ChannelSize <= 0 {
+		hasError = true
+		log.Error().Msg("invalid config: channel_size must be greater than 0")
+	}
+	if cfg.Quill.KafkaOffsetCommit.EveryMessages <= 0 {
+		hasError = true
+		log.Error().Msg("invalid config: every_messages must be greater than 0")
+	}
+	if cfg.Quill.KafkaOffsetCommit.EveryMilliseconds <= 0 {
+		hasError = true
+		log.Error().Msg("invalid config: every_milliseconds must be greater than 0")
 	}
 
 	for _, errConfig := range cfg.NonRetriableErrors {
 		if errConfig.Value == "" {
-			return fmt.Errorf("non retriable error value cannot be empty")
+			hasError = true
+			log.Error().Msg("invalid config: non retriable error value cannot be empty")
 		}
 
 		switch errConfig.Matched {
 		case ErrorMatchEquals, ErrorMatchContains:
 			continue
 		default:
-			return fmt.Errorf("invalid match type '%s' for error '%s': must be '%s' or '%s'",
+			hasError = true
+			log.Error().Msgf("invalid match type '%s' for error '%s': must be '%s' or '%s'",
 				errConfig.Matched, errConfig.Value, ErrorMatchEquals, ErrorMatchContains)
 		}
 	}
+	if hasError {
+		return fmt.Errorf("invalid config")
+	}
+
 	return nil
 }
 
@@ -150,10 +178,8 @@ func applyLogLevel(cfg *Config) {
 		zerolog.SetGlobalLevel(zerolog.ErrorLevel)
 	default:
 		zerolog.SetGlobalLevel(zerolog.InfoLevel)
-		log.Warn().Str("level", cfg.Logging.Level).Msg("Unknown log level, default INFO")
+		log.Warn().Msg("unrecognised log level, defaulting to INFO")
 	}
-	log.WithLevel(zerolog.NoLevel).
-		Msgf("log level is currently set to: %s", zerolog.GlobalLevel().String())
 }
 
 // -----------------------------------------------------------------------------
