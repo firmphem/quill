@@ -19,10 +19,12 @@ The service runs under this user for security.
 
 # 2. Install the binary
 
-Copy the compiled binary to a standard system location.
+Copy the compiled binary to a standard system location
 
 ```bash
-sudo install -m 755 quill /usr/local/bin/quill
+
+sudo cp /path/to/quill /usr/local/bin/quill
+sudo chmod 755 /usr/local/bin/quill
 ```
 
 Copies the binary to `/usr/local/bin`. `755` allows execution for all users, owned by `root`.
@@ -35,6 +37,8 @@ Create the configuration directory.
 
 ```bash
 sudo mkdir -p /etc/quill
+sudo chown root:quill /etc/quill/
+sudo chmod 750 /etc/quill/
 ```
 
 Creates the directory that stores configuration and secrets.
@@ -43,10 +47,10 @@ Creates the directory that stores configuration and secrets.
 
 # 4. Create configuration file
 
-Create the base configuration file.
+Create the base configuration file. Remember that "<id>" value we will use later. This should be a string value.
 
 ```bash
-sudo nano /etc/quill/config.yaml
+sudo nano /etc/quill/config-<id>.yaml
 ```
 
 ---
@@ -56,8 +60,8 @@ sudo nano /etc/quill/config.yaml
 Restrict access to the configuration file.
 
 ```bash
-sudo chown root:quill /etc/quill/config.yaml
-sudo chmod 640 /etc/quill/config.yaml
+sudo chown root:quill /etc/quill/config-<id>.yaml
+sudo chmod 640 /etc/quill/config-<id>.yaml
 ```
 
 `root` owns the file, members of the `quill` group can read it.  Other users cannot access it
@@ -106,7 +110,7 @@ Only `root` can read or modify the file
 Create the service definition.
 
 ```bash
-sudo nano /etc/systemd/system/quill.service
+sudo nano /etc/systemd/system/quill@.service
 ```
 
 Service unit:
@@ -120,12 +124,12 @@ After=network.target
 User=quill
 Group=quill
 EnvironmentFile=/etc/quill/quill.env
-ExecStart=/usr/local/bin/quill --config /etc/quill/config.yaml
+ExecStart=/usr/local/bin/quill --config /etc/quill/config-%i.yaml
 Restart=on-failure
 RestartSec=5s
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=quill
+SyslogIdentifier=quill-%i
 
 [Install]
 WantedBy=multi-user.target
@@ -169,7 +173,7 @@ Creates a symlink so the service starts automatically on boot
 Start the service immediately.
 
 ```bash
-sudo systemctl start quill
+sudo systemctl start quill@<id>
 ```
 
 Launches the quill
@@ -181,7 +185,7 @@ Launches the quill
 Verify that the service is running
 
 ```bash
-sudo systemctl status quill
+sudo systemctl status quill@<id>
 ```
 
 Shows the current state, logs, and exit codes
@@ -193,7 +197,7 @@ Shows the current state, logs, and exit codes
 View logs from the systemd journal
 
 ```bash
-journalctl -u quill -f
+journalctl -u quill@<id> -f
 ```
 
 Displays live logs for the service
