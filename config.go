@@ -88,8 +88,25 @@ func loadConfig(path string) (*Config, error) {
 	}
 
 	config.Database.Password = os.Getenv("QUILL_DB_PASSWORD")
-	if config.Database.Password == "" {
-		return nil, fmt.Errorf("QUILL_DB_PASSWORD not set")
+	if os.Getenv("QUILL_DB_USER") != "" {
+		log.Info().Msg("overwrite db user with env var")
+		config.Database.User = os.Getenv("QUILL_DB_USER")
+	}
+	if os.Getenv("QUILL_DB_HOST") != "" {
+		log.Info().Msg("overwrite db host with env var")
+		config.Database.Host = os.Getenv("QUILL_DB_HOST")
+	}
+	if os.Getenv("QUILL_DB_NAME") != "" {
+		log.Info().Msg("overwrite db name with env var")
+		config.Kafka.Brokers = strings.Split(os.Getenv("QUILL_DB_NAME"), ",")
+	}
+	if os.Getenv("KAFKA_TOPIC") != "" {
+		log.Info().Msg("overwrite kafka topic with env var")
+		config.Kafka.Topic = os.Getenv("KAFKA_TOPIC")
+	}
+	if os.Getenv("KAFKA_BROKERS") != "" {
+		log.Info().Msg("overwrite kafka topic with env var")
+		config.Kafka.Brokers = strings.Split(strings.ReplaceAll(os.Getenv("KAFKA_BROKERS"), ",", " "), " ")
 	}
 
 	if exitAfterNMessages > 0 {
@@ -119,6 +136,14 @@ func validateConfig(cfg *Config) error {
 	if cfg.Database.Host == "" || cfg.Database.User == "" || cfg.Database.Name == "" {
 		hasError = true
 		log.Error().Msg("invalid config: database config invalid")
+	}
+	if cfg.Database.Password == "" {
+		hasError = true
+		log.Error().Msg("invalid config: QUILL_DB_PASSWORD not set")
+	}
+	if cfg.Database.User == "" {
+		hasError = true
+		log.Error().Msg("invalid config: db user not set")
 	}
 	if cfg.Quill.BatchSize <= 0 {
 		hasError = true
