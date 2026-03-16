@@ -42,3 +42,8 @@ func fmtDuration(d time.Duration) string {
 	}
 	return fmt.Sprintf("%dns", d)
 }
+
+func toString(data interface{}) string {
+	bytes, _ := json.MarshalIndent(data, "", "    ")
+	return string(bytes)
+}
