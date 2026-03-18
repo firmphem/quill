@@ -16,12 +16,12 @@ func insertSensorErrorRow(
 	db *pgxpool.Pool,
 	reason string,
 	m *kafka.Message,
-) {
+) error {
 	rawValue := m.Value
 	partition := m.TopicPartition.Partition
 	offset := int64(m.TopicPartition.Offset)
 
-	log.Error().Int32("partition", partition).Int64("offset", offset).Msg("going to update update sensor_errors table")
+	log.Info().Int32("partition", partition).Int64("offset", offset).Msg("going to update update sensor_errors table")
 
 	if rawValue == nil {
 		rawValue = []byte("{}") // minimal placeholder
@@ -34,8 +34,41 @@ func insertSensorErrorRow(
 
 	if err != nil {
 		log.Error().Int32("partition", partition).Int64("offset", offset).Err(err).Msg("Failed to insert payload into sensor_error")
+		return err
 		// TODO: dump kafkaMessage into a file in the special folder.
 	}
+	return nil
+}
+
+func retryInsertSensorErrorRow(
+	ctx context.Context,
+	db *pgxpool.Pool,
+	reason string,
+	m *kafka.Message,
+) error {
+
+	err := retryUntilDone(
+		ctx,
+		"insertSensorError",
+		func(ctx context.Context) error {
+			e := insertSensorErrorRow(ctx, db, reason, m)
+			if e != nil {
+				dbOpRetryTotal.WithLabelValues().Inc()
+			}
+			return e
+		},
+		isRetriableErr,
+		"failure",
+		func(finalErr error) error {
+			return finalErr
+		},
+	)
+	// TODO: no metric for lost messages
+	if err == nil {
+		messagesSavedToSensorErrorTotal.WithLabelValues().Add(1)
+	}
+
+	return err
 }
 
 // func insertBatchFallback(ctx context.Context, db *pgxpool.Pool, batch []MetricRow, workerID int) error {

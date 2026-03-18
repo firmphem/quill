@@ -13,6 +13,20 @@ import (
 
 var commitsDoneAtomic atomic.Int32
 
+const (
+	KafkaOffsetSuccessful = "successful"
+	KafkaOffsetFailed     = "failed"
+)
+
+// -----------------------------------------------------------------------------
+func incKafkaOffsetCommitMetric(err error) {
+	status := KafkaOffsetSuccessful
+	if err != nil {
+		status = KafkaOffsetFailed
+	}
+	kafkaOffsetCommitTotal.WithLabelValues(status).Inc()
+}
+
 // -----------------------------------------------------------------------------
 func commitManager(ctx context.Context, partitionsMu *sync.Mutex, partitions map[int32]*partitionState, topic string, consumer *kafka.Consumer, ackCh <-chan Ack, commitDone chan struct{}) {
 	cfg := currentConfig.Load().(*Config)
@@ -45,8 +59,10 @@ func commitManager(ctx context.Context, partitionsMu *sync.Mutex, partitions map
 			if len(offsets) > 0 {
 				log.Debug().Interface("offsets", offsets).Msg("final commit on shutdown. we won't retry it.")
 				if _, err := consumer.CommitOffsets(offsets); err != nil {
+					incKafkaOffsetCommitMetric(err)
 					log.Error().Err(err).Msg("final commit failed")
 				} else {
+					incKafkaOffsetCommitMetric(nil)
 					partitionsMu.Lock()
 					for _, tp := range offsets {
 						if ps, ok := partitions[tp.Partition]; ok {
@@ -82,8 +98,10 @@ func commitManager(ctx context.Context, partitionsMu *sync.Mutex, partitions map
 					Offset:    ps.lastProcessed + 1,
 				}}
 				if _, err := consumer.CommitOffsets(offsets); err != nil {
+					incKafkaOffsetCommitMetric(err)
 					log.Error().Int32("partition", ack.Partition).Err(err).Msg("immediate commit failed")
 				} else {
+					incKafkaOffsetCommitMetric(nil)
 					ps.lastCommitted = ps.lastProcessed
 					ps.msgCount = 0
 					log.Debug().Int32("partition", ack.Partition).Int64("offset", int64(ps.lastCommitted+1)).Msg("immediate commit done")
@@ -106,6 +124,7 @@ func commitManager(ctx context.Context, partitionsMu *sync.Mutex, partitions map
 						"commitByBatch",
 						func(ctx context.Context) error {
 							_, err := consumer.CommitOffsets(offsets)
+							incKafkaOffsetCommitMetric(err)
 							return err
 						},
 						isRetriableErr,
@@ -162,6 +181,7 @@ func commitManager(ctx context.Context, partitionsMu *sync.Mutex, partitions map
 					"commitByBatch",
 					func(ctx context.Context) error {
 						_, err := consumer.CommitOffsets(offsets)
+						incKafkaOffsetCommitMetric(err)
 						return err
 					},
 					isRetriableErr,

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -75,7 +76,7 @@ func (pw *PartitionWorker) start(db *pgxpool.Pool, ackCh chan<- Ack) {
 				err := pw.processMessageNew(m, db)
 
 				if err != nil {
-					insertSensorErrorRow(pw.ctx, db, err.Error(), m)
+					retryInsertSensorErrorRow(pw.ctx, db, err.Error(), m)
 					log.Error().
 						Int32("partition", m.TopicPartition.Partition).
 						Int64("offset", int64(m.TopicPartition.Offset)).
@@ -101,7 +102,7 @@ func (pw *PartitionWorker) start(db *pgxpool.Pool, ackCh chan<- Ack) {
 						err := pw.processMessageNew(m, db)
 
 						if err != nil {
-							insertSensorErrorRow(pw.ctx, db, err.Error(), m)
+							retryInsertSensorErrorRow(pw.ctx, db, err.Error(), m)
 						}
 
 						ackCh <- Ack{
@@ -135,11 +136,17 @@ func (pw *PartitionWorker) processMessageNew(m *kafka.Message, db *pgxpool.Pool)
 	}
 
 	var customError error
-	messagesReceivedTotal.Inc()
 
 	var km KafkaMessage
 	if err := json.Unmarshal(m.Value, &km); err != nil {
 		return fmt.Errorf("failed to process payload due to json_unmarshal_failed: %w", err)
+	}
+
+	partitionLabel := strconv.FormatInt(int64(m.TopicPartition.Partition), 10)
+	if km.Payload.Timestamp > 0 {
+		lastMessageTimestampPerPartition.WithLabelValues(partitionLabel).Set(float64(km.Payload.Timestamp) / 1000)
+	} else {
+		log.Warn().Str("partition", partitionLabel).Msg("skipping staleness update: payload timestamp is zero or missing")
 	}
 
 	switch strings.ToUpper(km.Topic.Type) {
@@ -281,16 +288,17 @@ func (pw *PartitionWorker) processMessageNew(m *kafka.Message, db *pgxpool.Pool)
 		}
 
 		rows = append(rows, row)
-		rowsReceivedTotal.Inc()
 	}
 	s.end()
+	dpCountPerMessageHistogram.WithLabelValues().Observe(float64(len(km.Payload.Metrics)))
 
 	insertErr := pw.insertMetricsToPostgresWithRetries(db, rows, int(pw.partition))
 
 	if insertErr != nil {
 		customError = fmt.Errorf("insert into the postgres failed: %w", insertErr)
 	} else {
-		datapointsReceivedTotal.Add(float64(len(km.Payload.Metrics)))
+		messagesSavedToDBTotal.WithLabelValues().Inc()
+		dpWrittenIntoDBTotal.WithLabelValues().Add(float64(len(km.Payload.Metrics)))
 		datapointsReceivedAtomic.Add(uint64(len(km.Payload.Metrics)))
 	}
 
@@ -309,6 +317,7 @@ func runConsumer(globalCtx context.Context, cfg *Config, dbPool *pgxpool.Pool) {
 	var workerWG sync.WaitGroup
 
 	ackCh := make(chan Ack, cfg.Quill.ChannelSize)
+	go monitorChannel(globalCtx, "ack", ackCh)
 
 	topic := cfg.Kafka.Topic
 
@@ -351,6 +360,8 @@ func runConsumer(globalCtx context.Context, cfg *Config, dbPool *pgxpool.Pool) {
 			return nil
 
 		case kafka.RevokedPartitions:
+			groupConsumerRebalanceTotal.WithLabelValues().Inc()
+
 			log.Info().Msg("revoking partitions")
 			pollingPaused.Store(true)
 			workersMu.Lock()
@@ -388,6 +399,7 @@ func runConsumer(globalCtx context.Context, cfg *Config, dbPool *pgxpool.Pool) {
 					"commit_offset_on_rebalance",
 					func(ctx context.Context) error {
 						_, err := consumer.CommitOffsets(offsets)
+						incKafkaOffsetCommitMetric(err)
 						return err
 					},
 					isRetriableErr,
@@ -469,6 +481,7 @@ func runConsumer(globalCtx context.Context, cfg *Config, dbPool *pgxpool.Pool) {
 				if e.IsFatal() {
 					log.Fatal().Err(e).Msg("kafka fatal error")
 				}
+				kafkaErrorsByErrorTotal.WithLabelValues(e.Error()).Inc()
 				log.Warn().Err(e).Msg("kafka transient error")
 			}
 		}

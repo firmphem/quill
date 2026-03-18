@@ -1,12 +1,9 @@
-// implementation of prometheus endpoint used to monitor quill
-
 package main
 
 import (
 	"context"
 	"fmt"
 	"net/http"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -15,114 +12,189 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// TODO:
-// - monitor channel
-// -
-
 // just for debugging datapointsReceivedTotal
 var datapointsReceivedAtomic atomic.Uint64
 
 var (
-	isInstanceLeader        prometheus.Gauge
-	messagesTotal           prometheus.Counter
-	batchesTotal            prometheus.Counter
-	errorsTotal             prometheus.Counter
-	retriesTotal            prometheus.Counter
-	rowsInsertedTotal       prometheus.Counter
-	rowsFailedTotal         prometheus.Counter
-	rowsEnqueued            prometheus.Counter
-	messagesReceivedTotal   prometheus.Counter
-	rowsReceivedTotal       prometheus.Counter
-	datapointsReceivedTotal prometheus.Counter
-	offsetsCommittedTotal   prometheus.Counter
-	serviceUptimeSeconds    prometheus.Gauge
+	isInstanceLeader *prometheus.GaugeVec
+
+	// db related
+	messagesSavedToDBTotal          *prometheus.CounterVec
+	messagesSavedToSensorErrorTotal *prometheus.CounterVec
+	dpWrittenIntoDBTotal            *prometheus.CounterVec
+	dpCountPerMessageHistogram      *prometheus.HistogramVec
+	dbInsertDuration                *prometheus.HistogramVec
+
+	// kafka
+	groupConsumerRebalanceTotal *prometheus.CounterVec
+	kafkaErrorsByErrorTotal     *prometheus.CounterVec
+
+	// db related
+	dbInsertRetryTotal *prometheus.CounterVec
+	dbOpRetryTotal     *prometheus.CounterVec
+
+	// offsets
+	kafkaOffsetCommitTotal           *prometheus.CounterVec
+	lastMessageTimestampPerPartition *prometheus.GaugeVec
+
+	serviceUptimeSeconds *prometheus.GaugeVec
+
+	ackChannelUtilizationRatio *prometheus.GaugeVec
 )
 
 // -----------------------------------------------------------------------------
+func monitorChannel(ctx context.Context, name string, ch chan Ack) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	capacity := cap(ch)
+	log.Info().Str("channel", name).Int("cap", capacity).Str("channel", name).Msg("started channel monitoring")
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			fillRatio := float64(len(ch)) / float64(capacity)
+			ackChannelUtilizationRatio.WithLabelValues(name).Set(fillRatio)
+		}
+	}
+}
+
+// -----------------------------------------------------------------------------
 func initMetrics() {
-	isInstanceLeader = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: promMetricNameToRealName("quill_is_leader"),
-		Help: "Whether this instance is currently the leader (1 = leader, 0 = not leader)",
-	})
-	messagesTotal = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: promMetricNameToRealName("quill_messages_total"),
-		Help: "Total number of sensor datapoints processed",
-	})
-	batchesTotal = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: promMetricNameToRealName("quill_batches_total"),
-		Help: "Total number of batches inserted",
-	})
-	errorsTotal = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: promMetricNameToRealName("quill_errors_total"),
-		Help: "Total number of DB insert errors",
-	})
-	retriesTotal = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: promMetricNameToRealName("quill_retries_total"),
-		Help: "Total retries due to DB failures",
-	})
-	rowsInsertedTotal = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: promMetricNameToRealName("quill_rows_inserted_total"),
-		Help: "Rows successfully inserted",
-	})
-	rowsFailedTotal = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: promMetricNameToRealName("quill_rows_failed_total"),
-		Help: "Rows failed during insert",
-	})
-	rowsEnqueued = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: promMetricNameToRealName("quill_rows_enqueued_total"),
-		Help: "Rows enqueued from Kafka",
-	})
-	messagesReceivedTotal = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: promMetricNameToRealName("quill_messages_received_total"),
-		Help: "Kafka messages consumed",
-	})
-	rowsReceivedTotal = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: promMetricNameToRealName("quill_rows_received_total"),
-		Help: "Rows received from Kafka messages",
-	})
-	datapointsReceivedTotal = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: promMetricNameToRealName("quill_datapoints_received_total"),
-		Help: "Datapoints received from Kafka",
-	})
-	offsetsCommittedTotal = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Name: promMetricNameToRealName("quill_offsets_committed_total"),
-			Help: "Total number of Kafka offsets successfully committed",
-		})
-	serviceUptimeSeconds = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Name: promMetricNameToRealName("quill_uptime_seconds"),
-			Help: "Service uptime in seconds",
-		})
-}
+	labelsPerDatabaseInsertMethod := []string{"insert_method"}
+	labelsEmpty := []string{}
 
-// -----------------------------------------------------------------------------
-func promMetricNameToRealName(metric string) string {
 	cfg := currentConfig.Load().(*Config)
-	return strings.Replace(metric, "quill_", "quill_"+cfg.Kafka.Topic+"_", -1)
+	constLabels := prometheus.Labels{"service": cfg.Quill.ServiceName}
+
+	isInstanceLeader = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name:        "quill_is_leader",
+		Help:        "Whether this instance is currently the leader (1 = leader, 0 = not leader)",
+		ConstLabels: constLabels,
+	}, labelsEmpty)
+
+	messagesSavedToDBTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name:        "quill_messages_processed_total",
+		Help:        "Total number of payload saved to DB",
+		ConstLabels: constLabels,
+	}, labelsEmpty)
+
+	messagesSavedToSensorErrorTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name:        "quill_messages_failed_total",
+		Help:        "Total number of messages routed to sensor_errors",
+		ConstLabels: constLabels,
+	}, labelsEmpty)
+
+	dpWrittenIntoDBTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name:        "quill_datapoints_written_total",
+		Help:        "Total number of messages routed to sensor_errors",
+		ConstLabels: constLabels,
+	}, labelsEmpty)
+
+	dpCountPerMessageHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:        "quill_batch_size_histogram",
+			Help:        "histogram of actual batch sizes flushed",
+			Buckets:     []float64{10, 100, 1000, 10000, 100000, 1000000},
+			ConstLabels: constLabels,
+		}, labelsEmpty)
+
+	dbInsertDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:        "quill_db_operation_duration_seconds",
+			Help:        "Latency of database insert operations in seconds",
+			Buckets:     []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
+			ConstLabels: constLabels,
+		},
+		labelsPerDatabaseInsertMethod,
+	)
+
+	groupConsumerRebalanceTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name:        "quill_kafka_rebalances_total",
+		Help:        "Total number of rebalance event counter",
+		ConstLabels: constLabels,
+	}, labelsEmpty)
+
+	kafkaErrorsByErrorTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name:        "quill_kafka_errors_total",
+		Help:        "Total number kafka errors labelled by error",
+		ConstLabels: constLabels,
+	}, []string{"kafka_error"})
+
+	dbInsertRetryTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name:        "quill_db_insert_failures_total",
+		Help:        "Total number db insert retries",
+		ConstLabels: constLabels,
+	}, labelsPerDatabaseInsertMethod)
+
+	dbOpRetryTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name:        "quill_db_retries_total",
+		Help:        "Total number DB retry counter",
+		ConstLabels: constLabels,
+	}, labelsEmpty)
+
+	kafkaOffsetCommitTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name:        "quill_offset_commits_total",
+		Help:        "Total number of offset commits by status",
+		ConstLabels: constLabels,
+	}, []string{"status"})
+
+	serviceUptimeSeconds = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name:        "quill_uptime_seconds",
+		Help:        "Uptime",
+		ConstLabels: constLabels,
+	}, labelsEmpty)
+
+	ackChannelUtilizationRatio = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name:        "quill_channel_utilization_ratio",
+		Help:        "channel fill level vs configured channel_size",
+		ConstLabels: constLabels,
+	}, []string{"channel_name"})
+
+	lastMessageTimestampPerPartition = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name:        "quill_last_message_received_timestamp",
+		Help:        "The Unix timestamp of the last message received per partition",
+		ConstLabels: constLabels,
+	}, []string{"partition"})
+
+	isInstanceLeader.WithLabelValues().Set(0)
+	serviceUptimeSeconds.WithLabelValues().Set(0)
+
+	messagesSavedToDBTotal.WithLabelValues().Add(0)
+	messagesSavedToSensorErrorTotal.WithLabelValues().Add(0)
+	dpWrittenIntoDBTotal.WithLabelValues().Add(0)
+	groupConsumerRebalanceTotal.WithLabelValues().Add(0)
+	// kafkaErrorsByErrorTotal.WithLabelValues()
+	dbInsertRetryTotal.WithLabelValues(DbInsertMethodCopy).Add(0)
+	dbOpRetryTotal.WithLabelValues().Add(0)
+	kafkaOffsetCommitTotal.WithLabelValues(KafkaOffsetSuccessful).Add(0)
+	kafkaOffsetCommitTotal.WithLabelValues(KafkaOffsetFailed).Add(0)
+
+	dpCountPerMessageHistogram.WithLabelValues()
+	dbInsertDuration.WithLabelValues(DbInsertMethodCopy)
+	dbInsertDuration.WithLabelValues(DbInsertMethodInsert)
+
+	ackChannelUtilizationRatio.WithLabelValues("ack").Set(0)
+
 }
 
 // -----------------------------------------------------------------------------
-// func startPrometheusEndpoint(ctx context.Context, dbPool *pgxpool.Pool) *http.Server {
 func startPrometheusEndpoint(ctx context.Context) *http.Server {
 	cfg := currentConfig.Load().(*Config)
 
 	initMetrics()
 
 	prometheus.MustRegister(
-		isInstanceLeader, messagesTotal, batchesTotal, errorsTotal, retriesTotal,
-		rowsInsertedTotal, rowsFailedTotal, rowsEnqueued,
-		messagesReceivedTotal, rowsReceivedTotal, datapointsReceivedTotal, offsetsCommittedTotal, serviceUptimeSeconds,
+		isInstanceLeader, messagesSavedToDBTotal, messagesSavedToSensorErrorTotal, dpWrittenIntoDBTotal,
+		dpCountPerMessageHistogram, dbInsertDuration, groupConsumerRebalanceTotal, kafkaErrorsByErrorTotal,
+		dbInsertRetryTotal, dbOpRetryTotal, kafkaOffsetCommitTotal, serviceUptimeSeconds, ackChannelUtilizationRatio,
+		lastMessageTimestampPerPartition,
 	)
+
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
-	// mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-	// 	if err := dbPool.Ping(ctx); err != nil {
-	// 		http.Error(w, "DB not ready", http.StatusServiceUnavailable)
-	// 		return
-	// 	}
-	// 	w.Write([]byte("ok"))
-	// })
 
 	httpAddr := fmt.Sprintf("0.0.0.0:%d", cfg.HTTP.MetricsPort)
 	httpServer := &http.Server{
@@ -132,7 +204,7 @@ func startPrometheusEndpoint(ctx context.Context) *http.Server {
 
 	// Start HTTP server in background
 	go func() {
-		log.Info().Msgf("HTTP endpoints: /metrics /readyz at %s", httpAddr)
+		log.Info().Msgf("HTTP endpoints: /metrics at %s", httpAddr)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal().Err(err).Msg("HTTP server failed")
 		}
@@ -152,24 +224,24 @@ func startPrometheusEndpoint(ctx context.Context) *http.Server {
 				return
 			case <-ticker.C:
 				uptime := time.Since(start).Seconds()
-				serviceUptimeSeconds.Set(uptime)
+				serviceUptimeSeconds.WithLabelValues().Set(uptime)
 
 				// DPS
 				current := datapointsReceivedAtomic.Load()
 				delta := current - last
 				last = current
 
-				log.Info().Float64("dps since start", float64(current)/uptime).Float64("dps last 10s", float64(delta)/10).Msg("prometheus dummy report")
+				log.Info().
+					Float64("dps since start", float64(current)/uptime).
+					Float64("dps last 10s", float64(delta)/10).
+					Msg("prometheus report")
 			}
 		}
-	}()
 
+	}()
 	return httpServer
 }
 
-//	func startHTTP(ctx context.Context, dbPool *pgxpool.Pool) *http.Server {
-//		return startPrometheusEndpoint(ctx, dbPool)
-//	}
 func startHTTP(ctx context.Context) *http.Server {
 	return startPrometheusEndpoint(ctx)
 }
