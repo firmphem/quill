@@ -19,7 +19,7 @@ The service runs under this user for security.
 
 # 2. Install the binary
 
-Copy the compiled binary to a standard system location and set
+Copy the compiled binary to a standard system location
 
 ```bash
 
