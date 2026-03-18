@@ -5,10 +5,16 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
+)
+
+const (
+	DbInsertMethodCopy   = "copy"
+	DbInsertMethodInsert = "insert"
 )
 
 // -----------------------------------------------------------------------------
@@ -54,6 +60,7 @@ func insertBatchCopy(ctx context.Context, db *pgxpool.Pool, batch []MetricRow, w
 
 	s = tracker.startStage("pg-copy-exec")
 	defer s.end()
+	start := time.Now()
 	ct, err := db.CopyFrom(
 		ctx,
 		pgx.Identifier{"metric"},
@@ -74,12 +81,11 @@ func insertBatchCopy(ctx context.Context, db *pgxpool.Pool, batch []MetricRow, w
 		return fmt.Errorf("copy into metric failed: %w", err)
 	}
 
+	dbInsertDuration.WithLabelValues(DbInsertMethodCopy).Observe(time.Since(start).Seconds())
+
 	if int(ct) != len(batch) {
 		log.Debug().Int("worker", workerID).Int("expected", len(batch)).Int64("inserted", ct).Msg("COPY inserted fewer rows than expected")
 	}
-
-	rowsInsertedTotal.Add(float64(ct))
-	batchesTotal.Inc()
 
 	log.Debug().Int("worker", workerID).Int("batchSize", len(batch)).Int64("rowsInserted", ct).Msg("Batch inserted with COPY")
 
@@ -91,11 +97,21 @@ func (pw *PartitionWorker) insertMetricsToPostgresWithRetries(db *pgxpool.Pool, 
 	s := tracker.startStage("pg")
 	defer s.end()
 	copyTry := func(ctx context.Context) error {
-		return insertBatchCopy(pw.ctx, db, batch, workerID)
+		e := insertBatchCopy(pw.ctx, db, batch, workerID)
+		if e != nil {
+			dbInsertRetryTotal.WithLabelValues(DbInsertMethodCopy).Inc()
+			dbOpRetryTotal.WithLabelValues().Inc()
+		}
+		return e
 	}
 
 	batchTry := func(ctx context.Context) error {
-		return insertBatchTransactional(pw.ctx, db, batch, workerID)
+		e := insertBatchTransactional(pw.ctx, db, batch, workerID)
+		if e != nil {
+			dbInsertRetryTotal.WithLabelValues(DbInsertMethodInsert).Inc()
+			dbOpRetryTotal.WithLabelValues().Inc()
+		}
+		return e
 	}
 
 	fallbackToBatch := func(copyErr error) error {
@@ -158,6 +174,8 @@ func insertBatchTransactional(ctx context.Context, db *pgxpool.Pool, batch []Met
         ON CONFLICT DO NOTHING
     `
 
+	start := time.Now()
+
 	for i := 0; i < len(batch); i += cfg.Quill.BatchSize {
 		end := i + cfg.Quill.BatchSize
 		if end > len(batch) {
@@ -193,6 +211,7 @@ func insertBatchTransactional(ctx context.Context, db *pgxpool.Pool, batch []Met
 		log.Error().Err(err).Msg("transaction commit failed")
 		return fmt.Errorf("transaction commit failed: %w", err)
 	}
+	dbInsertDuration.WithLabelValues(DbInsertMethodInsert).Observe(time.Since(start).Seconds())
 
 	log.Debug().Int("worker", workerID).Int("batch", len(batch)).Msg("Batch inserted data")
 

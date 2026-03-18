@@ -42,6 +42,7 @@ type Config struct {
 		Name     string `yaml:"name"`
 	} `yaml:"database"`
 	Quill struct {
+		ServiceName       string        `yaml:"service_name"`
 		BatchSize         int           `yaml:"batch_size"`
 		BatchTimeout      time.Duration `yaml:"batch_timeout_seconds"`
 		ChannelSize       int           `yaml:"channel_size"`
@@ -107,6 +108,12 @@ func loadConfig(path string) (*Config, error) {
 	if os.Getenv("KAFKA_BROKERS") != "" {
 		log.Info().Msg("overwrite kafka topic with env var")
 		config.Kafka.Brokers = strings.Split(strings.ReplaceAll(os.Getenv("KAFKA_BROKERS"), ",", " "), " ")
+	}
+
+	if config.Quill.ServiceName == "" {
+		serviceNameDefault := "consumer-" + config.Kafka.Topic
+		log.Info().Msgf("service name is empty will use the default %s", serviceNameDefault)
+		config.Quill.ServiceName = serviceNameDefault
 	}
 
 	if exitAfterNMessages > 0 {

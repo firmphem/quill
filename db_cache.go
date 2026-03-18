@@ -120,6 +120,9 @@ func lookupOrCreateRefID(
 		func(innerCtx context.Context) (innerErr error) {
 			var lookupErr error
 			id, lookupErr = lookupOrCreateRef(innerCtx, db, tableName, columnName, value, fkColumn, fkValue)
+			if lookupErr != nil {
+				dbOpRetryTotal.WithLabelValues().Inc()
+			}
 			return lookupErr
 		},
 		isRetriableErr,
@@ -177,7 +180,12 @@ func lookupOrCreateMetricName(
 		ctx,
 		"lookupOrCreateMetricName",
 		func(innerCtx context.Context) (innerErr error) {
-			return db.QueryRow(innerCtx, sql, name, dataType, deviceIDNo).Scan(&id)
+			e := db.QueryRow(innerCtx, sql, name, dataType, deviceIDNo).Scan(&id)
+			if e != nil {
+				dbOpRetryTotal.WithLabelValues().Inc()
+			}
+
+			return e
 		},
 		isRetriableErr,
 		"failure",

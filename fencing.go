@@ -42,7 +42,7 @@ func amILeader() bool {
 func waitUntilLeader(ctx context.Context, cancel context.CancelFunc) error {
 	retryInterval := time.Second
 	logInterval := time.Minute
-	isInstanceLeader.Set(0)
+	isInstanceLeader.WithLabelValues().Set(0)
 
 	logTicker := time.NewTicker(logInterval)
 	defer logTicker.Stop()
@@ -103,7 +103,7 @@ func becomeLeader(id clientv3.LeaseID, cancel context.CancelFunc) {
 	leaseID = id
 
 	log.Info().Str("instanceID", instanceID).Msg("became a leader")
-	isInstanceLeader.Set(1)
+	isInstanceLeader.WithLabelValues().Set(1)
 
 	go keepAliveLoop(id, cancel)
 }
@@ -124,10 +124,6 @@ func keepAliveLoop(id clientv3.LeaseID, cancel context.CancelFunc) {
 			stopLeadership()
 			cancel()
 			return
-
-			// log.Fatal().Msg("leaving in order to avoid split brain...")
-			// log.Warn().Msg("leaving in order to avoid split brain...")
-			// stopLeadership()
 		}
 	}
 }
@@ -145,7 +141,7 @@ func stopLeadership() {
 		}
 	}
 
-	isInstanceLeader.Set(0)
+	isInstanceLeader.WithLabelValues().Set(0)
 	isLeader = false
 	log.Info().Msg("leadership state cleared locally")
 }

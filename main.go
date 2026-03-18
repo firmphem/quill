@@ -126,7 +126,13 @@ func main() {
 	defer dbPool.Close()
 
 	err = retryUntilDone(globalCtx, "createConsumerMetadataTable",
-		func(ctx context.Context) error { return createConsmumerMetadataTable(ctx, dbPool) },
+		func(ctx context.Context) error {
+			e := createConsmumerMetadataTable(ctx, dbPool)
+			if e != nil {
+				dbOpRetryTotal.WithLabelValues().Inc()
+			}
+			return e
+		},
 		isRetriableErr,
 		"failure",
 		func(finalErr error) error {
@@ -136,6 +142,9 @@ func main() {
 	if err != nil {
 		return
 	}
+
+	validateKafkaTopicAgainstPrevConsumed(globalCtx, dbPool, topicName, cfg.Kafka.Topic)
+	waitForLeadership(globalCtx, globalCancel)
 
 	tracker = newTracker(globalCtx, 10*time.Second, log.Logger)
 	if cfg.Tracker.Enabled {
@@ -160,6 +169,4 @@ func main() {
 	globalCancel()
 
 	gracefulHTTPShutdown(httpServer)
-
-	log.Info().Msg("application shutdown complete")
 }
