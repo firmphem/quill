@@ -35,69 +35,11 @@ func initDatabase(cfg *Config) *pgxpool.Pool {
 }
 
 // -----------------------------------------------------------------------------
-func insertBatchCopy(ctx context.Context, db *pgxpool.Pool, batch []MetricRow, workerID int) error {
-	if len(batch) == 0 {
-		return nil
-	}
-
-	s := tracker.startStage("pg-copy-transform")
-	rows := make([][]interface{}, len(batch))
-	for i, r := range batch {
-		rows[i] = []interface{}{
-			r.MetricTimestamp.UnixMilli(), // metric_timestamp (BIGINT)
-			r.ValueF,                      // valueF
-			r.ValueI,                      // valueI
-			r.MetricNameNo,                // metric_name_no
-			r.DeviceIDNo,                  // device_id_no
-			r.NodeIDNo,                    // node_id_no
-			r.GroupIDNo,                   // group_id_no
-			r.TypeNo,                      // type_no
-		}
-	}
-	s.end()
-
-	log.Debug().Int("worker", workerID).Int("row_count", len(batch)).Msg("COPYing batch into metric table")
-
-	s = tracker.startStage("pg-copy-exec")
-	defer s.end()
-	start := time.Now()
-	ct, err := db.CopyFrom(
-		ctx,
-		pgx.Identifier{"metric"},
-		[]string{
-			"metric_timestamp",
-			"value_f",
-			"value_i",
-			"metric_name_no",
-			"device_id_no",
-			"node_id_no",
-			"group_id_no",
-			"type_no",
-		},
-		pgx.CopyFromRows(rows),
-	)
-	if err != nil {
-		log.Error().Int("worker", workerID).Err(err).Msg("COPY failed")
-		return fmt.Errorf("copy into metric failed: %w", err)
-	}
-
-	dbInsertDuration.WithLabelValues(DbInsertMethodCopy).Observe(time.Since(start).Seconds())
-
-	if int(ct) != len(batch) {
-		log.Debug().Int("worker", workerID).Int("expected", len(batch)).Int64("inserted", ct).Msg("COPY inserted fewer rows than expected")
-	}
-
-	log.Debug().Int("worker", workerID).Int("batchSize", len(batch)).Int64("rowsInserted", ct).Msg("Batch inserted with COPY")
-
-	return nil
-}
-
-// -----------------------------------------------------------------------------
-func (pw *PartitionWorker) insertMetricsToPostgresWithRetries(db *pgxpool.Pool, batch []MetricRow, workerID int) error {
+func (pw *PartitionWorker) insertMetricsToPostgresWithRetries(db *pgxpool.Pool, batch []MetricRow, partitionID int) error {
 	s := tracker.startStage("pg")
 	defer s.end()
 	copyTry := func(ctx context.Context) error {
-		e := insertBatchCopy(pw.ctx, db, batch, workerID)
+		e := insertBatchCopy(pw.ctx, db, batch, partitionID)
 		if e != nil {
 			dbInsertRetryTotal.WithLabelValues(DbInsertMethodCopy).Inc()
 			dbOpRetryTotal.WithLabelValues().Inc()
@@ -106,7 +48,7 @@ func (pw *PartitionWorker) insertMetricsToPostgresWithRetries(db *pgxpool.Pool, 
 	}
 
 	batchTry := func(ctx context.Context) error {
-		e := insertBatchTransactional(pw.ctx, db, batch, workerID)
+		e := insertBatchTransactional(pw.ctx, db, batch, partitionID)
 		if e != nil {
 			dbInsertRetryTotal.WithLabelValues(DbInsertMethodInsert).Inc()
 			dbOpRetryTotal.WithLabelValues().Inc()
@@ -138,7 +80,63 @@ func (pw *PartitionWorker) insertMetricsToPostgresWithRetries(db *pgxpool.Pool, 
 }
 
 // -----------------------------------------------------------------------------
-func insertBatchTransactional(ctx context.Context, db *pgxpool.Pool, batch []MetricRow, workerID int) error {
+func insertBatchCopy(ctx context.Context, db *pgxpool.Pool, batch []MetricRow, partitionID int) error {
+	if len(batch) == 0 {
+		return nil
+	}
+
+	s := tracker.startStage("pg-copy-transform")
+	rows := make([][]interface{}, len(batch))
+	for i, r := range batch {
+		rows[i] = []interface{}{
+			r.MetricTimestamp.UnixMilli(), // metric_timestamp (BIGINT)
+			r.ValueF,                      // valueF
+			r.ValueI,                      // valueI
+			r.MetricNameNo,                // metric_name_no
+			r.DeviceIDNo,                  // device_id_no
+			r.NodeIDNo,                    // node_id_no
+			r.GroupIDNo,                   // group_id_no
+			r.TypeNo,                      // type_no
+		}
+	}
+	s.end()
+
+	s = tracker.startStage("pg-copy-exec")
+	defer s.end()
+	start := time.Now()
+	ct, err := db.CopyFrom(
+		ctx,
+		pgx.Identifier{"metric"},
+		[]string{
+			"metric_timestamp",
+			"value_f",
+			"value_i",
+			"metric_name_no",
+			"device_id_no",
+			"node_id_no",
+			"group_id_no",
+			"type_no",
+		},
+		pgx.CopyFromRows(rows),
+	)
+	if err != nil {
+		log.Error().Int("partition", partitionID).Err(err).Msg("COPY failed")
+		return fmt.Errorf("copy into metric failed: %w", err)
+	}
+
+	dbInsertDuration.WithLabelValues(DbInsertMethodCopy).Observe(time.Since(start).Seconds())
+
+	if int(ct) != len(batch) {
+		log.Debug().Int("rows_expected", len(batch)).Int64("rows_inserted", ct).Int("partition", partitionID).Msg("COPY inserted fewer rows than expected")
+	}
+
+	log.Debug().Int("rows_inserted", len(batch)).Int("partition", partitionID).Msg("Batch was inserted with COPY")
+
+	return nil
+}
+
+// -----------------------------------------------------------------------------
+func insertBatchTransactional(ctx context.Context, db *pgxpool.Pool, batch []MetricRow, partitionID int) error {
 	if len(batch) == 0 {
 		return nil
 	}
@@ -155,7 +153,7 @@ func insertBatchTransactional(ctx context.Context, db *pgxpool.Pool, batch []Met
 
 	defer func() {
 		if err != nil {
-			log.Error().Int("worker", workerID).Msg("BATCH failed")
+			log.Error().Int("partition", partitionID).Msg("BATCH failed")
 			_ = tx.Rollback(ctx)
 		}
 	}()
@@ -201,19 +199,19 @@ func insertBatchTransactional(ctx context.Context, db *pgxpool.Pool, batch []Met
 		br := tx.SendBatch(ctx, b)
 		if _, err2 := br.Exec(); err2 != nil {
 			br.Close()
-			log.Error().Err(err2).Msg("batch insert failed")
+			log.Error().Int("partition", partitionID).Err(err2).Msg("batch insert failed")
 			return fmt.Errorf("batch insert failed: %w", err2)
 		}
 		br.Close()
 	}
 
 	if err = tx.Commit(ctx); err != nil {
-		log.Error().Err(err).Msg("transaction commit failed")
+		log.Error().Int("partition", partitionID).Err(err).Msg("transaction commit failed")
 		return fmt.Errorf("transaction commit failed: %w", err)
 	}
 	dbInsertDuration.WithLabelValues(DbInsertMethodInsert).Observe(time.Since(start).Seconds())
 
-	log.Debug().Int("worker", workerID).Int("batch", len(batch)).Msg("Batch inserted data")
+	log.Debug().Int("rows_inserted", len(batch)).Int("partition", partitionID).Msg("Batch was inserted with INSERTs")
 
 	return nil
 }
