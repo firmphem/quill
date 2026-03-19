@@ -18,6 +18,10 @@ func isRetriableErr(err error) bool {
 		return true
 	}
 
+	// if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	// 	return false
+	// }
+
 	cfg := currentConfig.Load().(*Config)
 
 	errStr := strings.ToLower(err.Error())

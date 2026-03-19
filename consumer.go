@@ -45,7 +45,6 @@ func newPartitionWorker(partition int32, topic string, wg *sync.WaitGroup, paren
 }
 
 // -----------------------------------------------------------------------------
-
 func (pw *PartitionWorker) start(db *pgxpool.Pool, ackCh chan<- Ack) {
 	pw.wg.Add(1)
 
@@ -91,6 +90,11 @@ func (pw *PartitionWorker) start(db *pgxpool.Pool, ackCh chan<- Ack) {
 				}
 
 			case <-pw.ctx.Done():
+				if isShutdownRequested.Load() {
+					log.Warn().Int32("partition", pw.partition).Msg("shutdown requested: skipping drain")
+					return
+				}
+
 				for {
 					select {
 					case m, ok := <-pw.msgCh:
@@ -146,12 +150,12 @@ func (pw *PartitionWorker) processMessageNew(m *kafka.Message, db *pgxpool.Pool)
 	if km.Payload.Timestamp > 0 {
 		lastMessageTimestampPerPartition.WithLabelValues(partitionLabel).Set(float64(km.Payload.Timestamp) / 1000)
 	} else {
-		log.Warn().Str("partition", partitionLabel).Msg("skipping staleness update: payload timestamp is zero or missing")
+		log.Warn().Int32("partition", m.TopicPartition.Partition).Msg("skipping staleness update: payload timestamp is zero or missing")
 	}
 
 	switch strings.ToUpper(km.Topic.Type) {
 	case "NBIRTH":
-		log.Debug().Str("edgeNodeId", km.Topic.EdgeNodeID).Str("groupId", km.Topic.GroupID).Msg("Processing NBIRTH message")
+		log.Debug().Int32("partition", m.TopicPartition.Partition).Str("edgeNodeId", km.Topic.EdgeNodeID).Str("groupId", km.Topic.GroupID).Msg("Processing NBIRTH message")
 
 		// Minimal NBIRTH insertion (name + timestamp + edgeNodeId)
 		for _, metric := range km.Payload.Metrics {
@@ -180,7 +184,7 @@ func (pw *PartitionWorker) processMessageNew(m *kafka.Message, db *pgxpool.Pool)
 		return customError
 
 	case "DBIRTH":
-		log.Info().Str("edgeNodeId", km.Topic.EdgeNodeID).Str("groupId", km.Topic.GroupID).Msg("Processing DBIRTH message")
+		log.Info().Int32("partition", m.TopicPartition.Partition).Str("edgeNodeId", km.Topic.EdgeNodeID).Str("groupId", km.Topic.GroupID).Msg("Processing DBIRTH message")
 
 		// Validate presence of deviceId
 		if strings.TrimSpace(km.Topic.DeviceID) == "" {
@@ -408,7 +412,6 @@ func runConsumer(globalCtx context.Context, cfg *Config, dbPool *pgxpool.Pool) {
 						return finalErr
 					},
 				)
-				// _, err := consumer.CommitOffsets(offsets)
 				if err != nil {
 					log.Error().Err(err).Msg("commit on revoke failed")
 				}

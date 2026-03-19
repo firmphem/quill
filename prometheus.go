@@ -48,7 +48,7 @@ func monitorChannel(ctx context.Context, name string, ch chan Ack) {
 	defer ticker.Stop()
 
 	capacity := cap(ch)
-	log.Info().Str("channel", name).Int("cap", capacity).Str("channel", name).Msg("started channel monitoring")
+	log.Info().Str("channel", name).Int("capacity", capacity).Msg("started channel monitoring")
 
 	for {
 		select {

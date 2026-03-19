@@ -34,7 +34,8 @@ var (
 )
 
 var (
-	dedupMu sync.Mutex
+	dedupMu             sync.Mutex
+	isShutdownRequested atomic.Bool
 )
 
 // -----------------------------------------------------------------------------
@@ -161,8 +162,10 @@ func main() {
 
 	select {
 	case s := <-sig:
+		isShutdownRequested.Store(true)
 		log.Info().Str("signal", s.String()).Msg("shutdown requested via OS signal")
 	case <-globalCtx.Done():
+		isShutdownRequested.Store(true)
 		log.Info().Msg("shutdown requested internally")
 	}
 
