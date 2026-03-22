@@ -155,6 +155,10 @@ func main() {
 	}
 	defer tracker.stop()
 
+	if err := preloadReferenceCaches(globalCtx, dbPool); err != nil {
+		log.Fatal().Err(err).Msg("Failed to preload sensor cache")
+	}
+
 	go runConsumer(globalCtx, cfg, dbPool)
 
 	sig := make(chan os.Signal, 1)

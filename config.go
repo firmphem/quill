@@ -42,11 +42,12 @@ type Config struct {
 		Name     string `yaml:"name"`
 	} `yaml:"database"`
 	Quill struct {
-		ServiceName       string        `yaml:"service_name"`
-		BatchSize         int           `yaml:"batch_size"`
-		BatchTimeout      time.Duration `yaml:"batch_timeout_seconds"`
-		ChannelSize       int           `yaml:"channel_size"`
-		KafkaOffsetCommit struct {
+		DoNotRetireTooYoungMetricThresholdMilliseconds int64         `yaml:"do_not_retire_too_young_metric_threshold_ms"`
+		ServiceName                                    string        `yaml:"service_name"`
+		BatchSize                                      int           `yaml:"batch_size"`
+		BatchTimeout                                   time.Duration `yaml:"batch_timeout_seconds"`
+		ChannelSize                                    int           `yaml:"channel_size"`
+		KafkaOffsetCommit                              struct {
 			EveryMessages     int `yaml:"every_messages"`
 			EveryMilliseconds int `yaml:"every_milliseconds"`
 		} `yaml:"kafka_offset_commit"`
@@ -171,6 +172,10 @@ func validateConfig(cfg *Config) error {
 	if cfg.Quill.KafkaOffsetCommit.EveryMilliseconds <= 0 {
 		hasError = true
 		log.Error().Msg("invalid config: every_milliseconds must be greater than 0")
+	}
+	if cfg.Quill.DoNotRetireTooYoungMetricThresholdMilliseconds < 0 {
+		hasError = true
+		log.Error().Msg("invalid config: do_not_retire_too_young_metric_threshold_ms must be greater or equal to 0")
 	}
 
 	for _, errConfig := range cfg.NonRetriableErrors {
