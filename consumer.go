@@ -168,18 +168,50 @@ func (pw *PartitionWorker) processMessageNew(m *kafka.Message, db *pgxpool.Pool)
 				continue
 			}
 
-			_, err := db.Exec(pw.ctx, `
-				INSERT INTO nbirth (edge_node_id, metric_name, metric_timestamp)
-				VALUES ($1, $2, $3);
-			`, km.Topic.EdgeNodeID, metric.Name, metric.Timestamp)
+			groupID, err := lookupOrCreateRefID(pw.ctx, db, groupCache, &refMu, "group_ref", "group_id", km.Topic.GroupID)
+			if err != nil {
+				return fmt.Errorf("failed to resolve group_ref: %w", err)
+			}
+			nodeID, err := lookupOrCreateRefID(pw.ctx, db, nodeCache, &refMu, "edge_node", "edge_node_id", km.Topic.EdgeNodeID, "group_id_no", groupID)
+			if err != nil {
+				return fmt.Errorf("failed to resolve group_ref: %w", err)
+			}
+
+			err = retryUntilDone(
+				pw.ctx,
+				"insertNBirth",
+				func(innerCtx context.Context) error {
+					_, innerErr := db.Exec(innerCtx, `
+                     INSERT INTO nbirth (node_id_no, payload, birth_seq, received_at)
+                     VALUES ($1, $2, $3, $4)
+                     ON CONFLICT (node_id_no)
+                     DO UPDATE SET
+                         payload     = EXCLUDED.payload,
+                         birth_seq   = EXCLUDED.birth_seq,
+                         received_at = EXCLUDED.received_at
+                 `, nodeID, toString(km), km.Payload.Seq, km.Payload.Timestamp)
+					if innerErr != nil {
+						dbOpRetryTotal.WithLabelValues().Inc()
+					}
+					return innerErr
+				},
+				isRetriableErr,
+				"nbirth_insert_failed",
+				func(finalErr error) error {
+					return finalErr
+				},
+			)
+
 			if err != nil {
 				customError = errors.New("failed to process payload due to nbirth_insert_failed")
 				log.Error().
+					Err(err).
 					Int32("partition", m.TopicPartition.Partition).
 					Int64("offset", int64(m.TopicPartition.Offset)).
-					Msg("failed to process payload due to nbirth_insert_failed")
+					Msg("failed to process payload due to nbirth_insert_failed after multiple retries")
 				continue
 			}
+
 		}
 		return customError
 
@@ -203,18 +235,61 @@ func (pw *PartitionWorker) processMessageNew(m *kafka.Message, db *pgxpool.Pool)
 				continue
 			}
 
-			_, err := db.Exec(pw.ctx, `
-				INSERT INTO dbirth (edge_node_id, device_id, metric_name, metric_timestamp, data_type)
-				VALUES ($1, $2, $3, $4, $5);
-			`, km.Topic.EdgeNodeID, km.Topic.DeviceID, metric.Name, metric.Timestamp, metric.DataType)
+			groupID, err := lookupOrCreateRefID(pw.ctx, db, groupCache, &refMu, "group_ref", "group_id", km.Topic.GroupID)
+			if err != nil {
+				return fmt.Errorf("failed to resolve group_ref: %w", err)
+			}
+			nodeID, err := lookupOrCreateRefID(pw.ctx, db, nodeCache, &refMu, "edge_node", "edge_node_id", km.Topic.EdgeNodeID, "group_id_no", groupID)
+			if err != nil {
+				return fmt.Errorf("failed to resolve group_ref: %w", err)
+			}
+			deviceID, err := lookupOrCreateRefID(pw.ctx, db, deviceCache, &refMu, "device", "device_id", km.Topic.DeviceID, "node_id_no", nodeID)
+			if err != nil {
+				return fmt.Errorf("failed to resolve device: %w", err)
+			}
+
+			err = retryUntilDone(
+				pw.ctx,
+				"insertDBirth",
+				func(innerCtx context.Context) error {
+					_, innerErr := db.Exec(innerCtx, `
+                     INSERT INTO dbirth (node_id_no, device_id_no, payload, birth_seq, received_at)
+                     VALUES ($1, $2, $3, $4, $5)
+                     ON CONFLICT (node_id_no, device_id_no)
+                     DO UPDATE SET
+                         payload     = EXCLUDED.payload,
+                         birth_seq   = EXCLUDED.birth_seq,
+                         received_at = EXCLUDED.received_at;
+                 `, nodeID, deviceID, toString(km), km.Payload.Seq, km.Payload.Timestamp)
+					if innerErr != nil {
+						dbOpRetryTotal.WithLabelValues().Inc()
+					}
+					return innerErr
+				},
+				isRetriableErr,
+				"dbirth_insert_failed",
+				func(finalErr error) error {
+					return finalErr
+				},
+			)
+
 			if err != nil {
 				customError = errors.New("failed to process payload due to dbirth_missing_device_id")
 				log.Error().
+					Err(err).
 					Int32("partition", m.TopicPartition.Partition).
 					Int64("offset", int64(m.TopicPartition.Offset)).
-					Msg("failed to process payload due to dbirth_insert_failed")
+					Msg("failed to process payload after multiple retries")
+
 				continue
 			}
+
+			//  need to create a metric name while processing DBIRTH
+			_, err = lookupOrCreateMetricName(pw.ctx, db, metricNameCache, &refMu, metric.Name, metric.DataType, deviceID, metric.Timestamp)
+			if err != nil {
+				return fmt.Errorf("failed to lookupOrCreateMetricName during processing DBIRTH: %w", err)
+			}
+
 		}
 
 		return customError
@@ -261,8 +336,7 @@ func (pw *PartitionWorker) processMessageNew(m *kafka.Message, db *pgxpool.Pool)
 			continue
 		}
 
-		//  metric name ID lookup
-		metricNameID, err := lookupOrCreateMetricName(pw.ctx, db, metricNameCache, &refMu, metric.Name, metric.DataType, deviceID)
+		metricNameID, err := lookupOrCreateMetricName(pw.ctx, db, metricNameCache, &refMu, metric.Name, metric.DataType, deviceID, metric.Timestamp)
 		if err != nil {
 			customError = fmt.Errorf("failed to process payload due to failed lookup metricNameID by name: %v", metric.Name)
 			log.Error().
