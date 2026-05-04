@@ -41,16 +41,17 @@ func amILeader() bool {
 // -----------------------------------------------------------------------------
 func waitUntilLeader(ctx context.Context, cancel context.CancelFunc) error {
 	retryInterval := time.Second
-	logInterval := time.Minute
 	isInstanceLeader.WithLabelValues().Set(0)
 
-	logTicker := time.NewTicker(logInterval)
+	logTicker := time.NewTicker(time.Minute)
 	defer logTicker.Stop()
+
+	log.Info().Msg("starting leader election loop...")
 
 	for {
 		select {
 		case <-logTicker.C:
-			log.Info().Msg("checking if can become a leader...")
+			log.Info().Msg("checking if can become a leader (background check)...")
 		default:
 		}
 
@@ -74,12 +75,16 @@ func waitUntilLeader(ctx context.Context, cancel context.CancelFunc) error {
 // -----------------------------------------------------------------------------
 func tryBecomeLeader(ctx context.Context, cancel context.CancelFunc) (bool, error) {
 	cfg := currentConfig.Load().(*Config)
-	leaseResp, err := cli.Grant(ctx, int64(cfg.Etcd.LeaseTTLSeconds))
+
+	rpcCtx, rpcCancel := context.WithTimeout(ctx, 3*time.Second)
+	defer rpcCancel()
+
+	leaseResp, err := cli.Grant(rpcCtx, int64(cfg.Etcd.LeaseTTLSeconds))
 	if err != nil {
 		return false, err
 	}
 
-	txn := cli.Txn(ctx).
+	txn := cli.Txn(rpcCtx).
 		If(clientv3.Compare(clientv3.CreateRevision(cfg.Etcd.EtcdLeaderKey), "=", 0)).
 		Then(clientv3.OpPut(cfg.Etcd.EtcdLeaderKey, instanceID, clientv3.WithLease(leaseResp.ID)))
 
@@ -93,38 +98,47 @@ func tryBecomeLeader(ctx context.Context, cancel context.CancelFunc) (bool, erro
 	}
 
 	// we are about to become a leader
-	becomeLeader(leaseResp.ID, cancel)
+	becomeLeader(ctx, leaseResp.ID, cancel)
 	return true, nil
 }
 
 // -----------------------------------------------------------------------------
-func becomeLeader(id clientv3.LeaseID, cancel context.CancelFunc) {
+func becomeLeader(ctx context.Context, id clientv3.LeaseID, cancel context.CancelFunc) {
 	isLeader = true
 	leaseID = id
 
 	log.Info().Str("instanceID", instanceID).Msg("became a leader")
 	isInstanceLeader.WithLabelValues().Set(1)
 
-	go keepAliveLoop(id, cancel)
+	go keepAliveLoop(ctx, id, cancel)
 }
 
 // -----------------------------------------------------------------------------
-func keepAliveLoop(id clientv3.LeaseID, cancel context.CancelFunc) {
-	ctx := context.Background()
-
+func keepAliveLoop(ctx context.Context, id clientv3.LeaseID, cancel context.CancelFunc) {
 	ch, err := cli.KeepAlive(ctx, id)
 	if err != nil {
 		log.Error().Err(err).Msg("keepalive failed:")
 	}
 
 	for {
-		_, ok := <-ch
-		if !ok {
-			log.Warn().Msg("Lost etcd keepalive. Triggering graceful shutdown to avoid split brain...")
-			stopLeadership()
-			cancel()
+		select {
+		case <-ctx.Done():
 			return
+		case _, ok := <-ch:
+			if !ok {
+				log.Warn().Msg("Lost etcd keepalive...")
+				stopLeadership()
+				cancel()
+				return
+			}
 		}
+		// _, ok := <-ch
+		// if !ok {
+		// 	log.Warn().Msg("Lost etcd keepalive. Triggering graceful shutdown to avoid split brain...")
+		// 	stopLeadership()
+		// 	cancel()
+		// 	return
+		// }
 	}
 }
 
