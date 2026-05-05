@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -24,22 +25,33 @@ func isRetriableErr(err error) bool {
 
 	cfg := currentConfig.Load().(*Config)
 
+	if isErrorMatched(err, cfg.CausingFailureErrors) {
+		log.Error().Str("got error", err.Error()).Msg("this error considered as fatal. will cause an abnormal quit")
+		os.Exit(1)
+	}
+
+	isNonRetriableError := isErrorMatched(err, cfg.NonRetriableErrors)
+
+	return !isNonRetriableError
+}
+
+// -----------------------------------------------------------------------------
+func isErrorMatched(err error, list []ErrorMatcher) bool {
 	errStr := strings.ToLower(err.Error())
 
-	for _, matcher := range cfg.NonRetriableErrors {
+	for _, matcher := range list {
 		switch matcher.Matched {
 		case ErrorMatchEquals:
-			if errStr == matcher.Value {
-				return false
+			if errStr == strings.ToLower(matcher.Value) {
+				return true
 			}
 		case ErrorMatchContains:
-			if strings.Contains(errStr, matcher.Value) {
-				return false
+			if strings.Contains(errStr, strings.ToLower(matcher.Value)) {
+				return true
 			}
 		}
 	}
-
-	return true
+	return false
 }
 
 // -----------------------------------------------------------------------------

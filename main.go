@@ -8,13 +8,11 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	_ "github.com/lib/pq"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -92,23 +90,6 @@ func loadAndInitConfig() *Config {
 	currentConfig.Store(cfg)
 	applyLogLevel(cfg)
 	return cfg
-}
-
-// -----------------------------------------------------------------------------
-func initKafkaConsumer(cfg *Config) *kafka.Consumer {
-	kcfg := &kafka.ConfigMap{
-		"bootstrap.servers":  strings.Join(cfg.Kafka.Brokers, ","),
-		"group.id":           cfg.Kafka.GroupID,
-		"enable.auto.commit": false,
-		"auto.offset.reset":  "earliest",
-	}
-
-	consumer, err := kafka.NewConsumer(kcfg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "kafka consumer create: %v\n", err)
-		os.Exit(2)
-	}
-	return consumer
 }
 
 // -----------------------------------------------------------------------------

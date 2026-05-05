@@ -66,7 +66,8 @@ type Config struct {
 		LeaseTTLSeconds int      `yaml:"leaseTTLSeconds"`
 		EtcdLeaderKey   string   `yaml:"etcdLeaderKey"`
 	} `yaml:"etcd"`
-	NonRetriableErrors []ErrorMatcher `yaml:"non_retriable_errors"`
+	NonRetriableErrors   []ErrorMatcher `yaml:"non_retriable_errors"`
+	CausingFailureErrors []ErrorMatcher `yaml:"causing_failure_errors"`
 }
 
 var configFile string
@@ -178,10 +179,27 @@ func validateConfig(cfg *Config) error {
 		log.Error().Msg("invalid config: do_not_retire_too_young_metric_threshold_ms must be greater or equal to 0")
 	}
 
-	for _, errConfig := range cfg.NonRetriableErrors {
+	if checkErrors(cfg.NonRetriableErrors) {
+		hasError = true
+	}
+	if checkErrors(cfg.CausingFailureErrors) {
+		hasError = true
+	}
+
+	if hasError {
+		return fmt.Errorf("invalid config")
+	}
+
+	return nil
+}
+
+// -----------------------------------------------------------------------------
+func checkErrors(e []ErrorMatcher) bool {
+	hasError := false
+	for _, errConfig := range e {
 		if errConfig.Value == "" {
 			hasError = true
-			log.Error().Msg("invalid config: non retriable error value cannot be empty")
+			log.Error().Msg("invalid config: error value/string cannot be empty")
 		}
 
 		switch errConfig.Matched {
@@ -193,11 +211,8 @@ func validateConfig(cfg *Config) error {
 				errConfig.Matched, errConfig.Value, ErrorMatchEquals, ErrorMatchContains)
 		}
 	}
-	if hasError {
-		return fmt.Errorf("invalid config")
-	}
 
-	return nil
+	return hasError
 }
 
 // -----------------------------------------------------------------------------
