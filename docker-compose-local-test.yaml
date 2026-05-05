@@ -49,7 +49,7 @@ services:
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://rwe-kafka:9092
-      KAFKA_HEAP_OPTS: "-Xms1200m -Xmx1200m"
+      KAFKA_HEAP_OPTS: "-Xms800m -Xmx800m"
     volumes:
       - kafka_data:/var/lib/kafka/data
     networks:

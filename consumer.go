@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -384,7 +385,25 @@ func (pw *PartitionWorker) processMessageNew(m *kafka.Message, db *pgxpool.Pool)
 }
 
 // -----------------------------------------------------------------------------
+func initKafkaConsumer(cfg *Config) *kafka.Consumer {
+	kcfg := &kafka.ConfigMap{
+		"bootstrap.servers":  strings.Join(cfg.Kafka.Brokers, ","),
+		"group.id":           cfg.Kafka.GroupID,
+		"enable.auto.commit": false,
+		"auto.offset.reset":  "earliest",
+	}
+
+	consumer, err := kafka.NewConsumer(kcfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "kafka consumer create: %v\n", err)
+		os.Exit(2)
+	}
+	return consumer
+}
+
+// -----------------------------------------------------------------------------
 func runConsumer(globalCtx context.Context, cfg *Config, dbPool *pgxpool.Pool) {
+	log.Info().Msg("starting process of creating consumer")
 	mainConsumer := initKafkaConsumer(cfg)
 
 	workers := make(map[int32]*PartitionWorker)
@@ -423,6 +442,7 @@ func runConsumer(globalCtx context.Context, cfg *Config, dbPool *pgxpool.Pool) {
 	}
 
 	err := mainConsumer.Subscribe(topic, func(consumer *kafka.Consumer, ev kafka.Event) error {
+		log.Info().Msg("subscribing the kafka topic")
 		switch e := ev.(type) {
 		case kafka.AssignedPartitions:
 			log.Info().Interface("partitions", e.Partitions).Msg("assigned")
@@ -515,7 +535,7 @@ func runConsumer(globalCtx context.Context, cfg *Config, dbPool *pgxpool.Pool) {
 	})
 
 	if err != nil {
-		log.Fatal().Err(err).Msg("subscribe failed")
+		log.Fatal().Err(err).Msg("subscription process failed")
 	}
 
 	go func() {
@@ -560,6 +580,8 @@ func runConsumer(globalCtx context.Context, cfg *Config, dbPool *pgxpool.Pool) {
 				}
 				kafkaErrorsByErrorTotal.WithLabelValues(e.Error()).Inc()
 				log.Warn().Err(e).Msg("kafka transient error")
+				isRetriableErr(e) // here is just to check if it is a fatal error
+				time.Sleep(50 * time.Millisecond)
 			}
 		}
 	}()

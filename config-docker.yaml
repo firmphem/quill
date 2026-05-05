@@ -25,7 +25,7 @@ http:
   metrics_port: 8081
 
 logging:
-   level: TRACE
+   level: INFO
 
 tracker:
    enabled: false
@@ -38,4 +38,8 @@ etcd:
 
 non_retriable_errors:
    - value: json_unmarshal_failed
+     matched: equals
+
+causing_failure_errors:
+   - value: "Broker: Unknown member"
      matched: equals

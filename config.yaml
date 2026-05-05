@@ -37,3 +37,7 @@ etcd:
 non_retriable_errors:
    - value: json_unmarshal_failed
      matched: contains
+
+causing_failure_errors:
+   - value: "Broker: Unknown member"
+     matched: equals
