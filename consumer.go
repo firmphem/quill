@@ -442,7 +442,6 @@ func runConsumer(globalCtx context.Context, cfg *Config, dbPool *pgxpool.Pool) {
 	}
 
 	err := mainConsumer.Subscribe(topic, func(consumer *kafka.Consumer, ev kafka.Event) error {
-		log.Info().Msg("subscribing the kafka topic")
 		switch e := ev.(type) {
 		case kafka.AssignedPartitions:
 			log.Info().Interface("partitions", e.Partitions).Msg("assigned")

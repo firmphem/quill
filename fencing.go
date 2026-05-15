@@ -11,10 +11,11 @@ import (
 )
 
 var (
-	cli        *clientv3.Client
-	leaseID    clientv3.LeaseID
-	isLeader   bool
-	instanceID = hostname()
+	cli          *clientv3.Client
+	leaseID      clientv3.LeaseID
+	isLeader     bool
+	instanceID   = hostname()
+	abnormalExit bool
 )
 
 // -----------------------------------------------------------------------------
@@ -117,7 +118,7 @@ func becomeLeader(ctx context.Context, id clientv3.LeaseID, cancel context.Cance
 func keepAliveLoop(ctx context.Context, id clientv3.LeaseID, cancel context.CancelFunc) {
 	ch, err := cli.KeepAlive(ctx, id)
 	if err != nil {
-		log.Error().Err(err).Msg("keepalive failed:")
+		log.Error().Err(err).Msg("keepalive failed")
 	}
 
 	for {
@@ -126,19 +127,14 @@ func keepAliveLoop(ctx context.Context, id clientv3.LeaseID, cancel context.Canc
 			return
 		case _, ok := <-ch:
 			if !ok {
-				log.Warn().Msg("Lost etcd keepalive...")
+				// probably we can call just log.Fatal()... and be happy about that
+				abnormalExit = true
+				log.Error().Msg("lost etcd keepalive. forcing abnormal exit in order to avoid possible brain-split")
 				stopLeadership()
 				cancel()
 				return
 			}
 		}
-		// _, ok := <-ch
-		// if !ok {
-		// 	log.Warn().Msg("Lost etcd keepalive. Triggering graceful shutdown to avoid split brain...")
-		// 	stopLeadership()
-		// 	cancel()
-		// 	return
-		// }
 	}
 }
 
@@ -151,7 +147,7 @@ func stopLeadership() {
 		log.Info().Msg("attempting to revoke etcd lease...")
 		_, err := cli.Revoke(ctx, leaseID)
 		if err != nil {
-			log.Warn().Err(err).Msg("could not revoke lease (etcd might be unreachable)")
+			log.Error().Err(err).Msg("could not revoke lease (etcd might be unreachable)")
 		}
 	}
 

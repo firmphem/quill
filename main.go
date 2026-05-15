@@ -122,7 +122,7 @@ func main() {
 			return nil
 		})
 	if err != nil {
-		return
+		os.Exit(2)
 	}
 
 	validateKafkaTopicAgainstPrevConsumed(globalCtx, dbPool, topicName, cfg.Kafka.Topic)
@@ -140,7 +140,11 @@ func main() {
 		log.Fatal().Err(err).Msg("Failed to preload sensor cache")
 	}
 
-	go runConsumer(globalCtx, cfg, dbPool)
+	consumerDone := make(chan struct{})
+	go func() {
+		runConsumer(globalCtx, cfg, dbPool)
+		close(consumerDone)
+	}()
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
@@ -155,6 +159,12 @@ func main() {
 	}
 
 	globalCancel()
+	<-consumerDone
 
 	gracefulHTTPShutdown(httpServer)
+
+	if abnormalExit || (globalCtx.Err() != nil && globalCtx.Err() != context.Canceled) {
+		log.Error().Msg("abnormal exit")
+		os.Exit(1)
+	}
 }
